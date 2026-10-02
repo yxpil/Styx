@@ -1,0 +1,18 @@
+[package]
+name = "styx-assoc"
+description = "Styx: 联想端口 —— 对接 MightBe 的联想/推理能力，并内置共现图兜底实现"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["mightbe"]
+# 对接 MightBe 服务（行分隔文本协议）。
+mightbe = []
+
+[dependencies]
+styx-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

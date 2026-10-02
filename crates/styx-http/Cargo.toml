@@ -1,0 +1,19 @@
+[package]
+name = "styx-http"
+description = "Styx: 极小的 HTTP 客户端（标准库明文 + 可选 rustls HTTPS），不引入异步运行时"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["tls"]
+# HTTPS 支持。关掉它可以得到一个只依赖标准库、纯离线可编译的构建，
+# 用于对接本机 http:// 上的自建模型服务（Ollama / LM Studio / vLLM / one-api…）。
+tls = ["dep:ureq"]
+
+[dependencies]
+styx-core.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq = { version = "2", default-features = false, features = ["tls", "webpki-roots"], optional = true }

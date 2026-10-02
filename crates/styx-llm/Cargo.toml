@@ -1,0 +1,19 @@
+[package]
+name = "styx-llm"
+description = "Styx: 语言模型端口 —— OpenAI 兼容客户端 + RLBCM 风格多端点加权调度"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# 启用真实 HTTP 传输（含 HTTPS）。
+http = ["dep:styx-http"]
+
+[dependencies]
+styx-core.workspace = true
+styx-http = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

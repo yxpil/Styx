@@ -1,0 +1,25 @@
+[package]
+name = "styx-memory"
+description = "Styx: 长期记忆端口 —— 复刻 Nebula 加密 TCP 会话协议，并内置内存兜底实现"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["nebula"]
+# 对接 Nebula 服务（复刻其 NEBULA2 握手 + ChaCha20-Poly1305 加密帧）。
+nebula = ["dep:argon2", "dep:chacha20poly1305", "dep:hkdf", "dep:hmac", "dep:sha2", "dep:rand"]
+
+[dependencies]
+styx-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+argon2 = { workspace = true, optional = true }
+chacha20poly1305 = { workspace = true, optional = true }
+hkdf = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
+rand = { version = "0.8", optional = true }

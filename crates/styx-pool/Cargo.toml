@@ -1,0 +1,20 @@
+[package]
+name = "styx-pool"
+description = "Styx: 共享记忆池端口 —— 对接 MemoryPool 的 HTTP / BIT Remote 协议"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# 关闭后只剩本地兜底实现，可完全离线运行。
+http = ["dep:styx-http"]
+
+[dependencies]
+styx-core.workspace = true
+styx-http = { workspace = true, optional = true }
+styx-memory.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

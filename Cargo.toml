@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/styx-core",
+    "crates/styx-http",
+    "crates/styx-llm",
+    "crates/styx-memory",
+    "crates/styx-assoc",
+    "crates/styx-pool",
+    "crates/styx-tools",
+    "crates/styx-server",
+    "crates/styx-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/yxpil/Styx.git"
+authors = ["yxpil"]
+rust-version = "1.75"
+
+[workspace.dependencies]
+styx-core = { path = "crates/styx-core", version = "0.1.0" }
+styx-http = { path = "crates/styx-http", version = "0.1.0" }
+styx-llm = { path = "crates/styx-llm", version = "0.1.0" }
+styx-memory = { path = "crates/styx-memory", version = "0.1.0" }
+styx-assoc = { path = "crates/styx-assoc", version = "0.1.0" }
+styx-pool = { path = "crates/styx-pool", version = "0.1.0" }
+styx-tools = { path = "crates/styx-tools", version = "0.1.0" }
+styx-server = { path = "crates/styx-server", version = "0.1.0" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+
+# --- 与 Nebula 对齐的密码学原语（用于复刻其 NEBULA2 加密会话协议）---
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 2
+lto = false

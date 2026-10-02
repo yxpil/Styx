@@ -1,0 +1,18 @@
+[package]
+name = "styx-server"
+description = "Styx: TCP 服务 —— 把角色扮演内核暴露为多客户端常驻服务"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+styx-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+styx-memory.workspace = true
+styx-assoc.workspace = true
+styx-llm.workspace = true

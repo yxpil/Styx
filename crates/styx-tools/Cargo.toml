@@ -1,0 +1,18 @@
+[package]
+name = "styx-tools"
+description = "Styx: 工具端口 —— 内置工具 + MCP / BIT Remote 桥"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# MCP 与 BIT Remote 桥需要 HTTP。
+http = ["dep:styx-http"]
+
+[dependencies]
+styx-core.workspace = true
+styx-http = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true

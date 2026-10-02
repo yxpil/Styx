@@ -1,0 +1,12 @@
+[package]
+name = "styx-core"
+description = "Styx: 角色扮演内核的核心领域模型、端口抽象与回合编排"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

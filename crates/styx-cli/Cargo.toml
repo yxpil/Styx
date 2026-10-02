@@ -1,0 +1,28 @@
+[package]
+name = "styx"
+description = "Styx —— 可联动的角色扮演内核：交互式 REPL / TCP 服务 / 后端探针 / 离线演示"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "styx"
+path = "src/main.rs"
+
+[dependencies]
+styx-core = { workspace = true }
+styx-http = { workspace = true }
+styx-llm = { workspace = true, features = ["http"] }
+styx-memory = { workspace = true }
+styx-assoc = { workspace = true }
+styx-pool = { workspace = true, features = ["http"] }
+styx-tools = { workspace = true, features = ["http"] }
+styx-server = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }

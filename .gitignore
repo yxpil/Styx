@@ -1,0 +1,16 @@
+/target
+**/*.rs.bk
+Cargo.lock.orig
+
+# 运行时数据：记忆库、日志、会话快照
+*.ndb
+*.log
+/styx-data/
+/styx.json
+/endpoints.json
+
+# 编辑器 / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
