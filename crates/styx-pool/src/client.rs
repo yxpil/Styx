@@ -2,7 +2,7 @@
 //!
 //! 对接 [MemoryPool](https://github.com/yxpil/MemoryPool) 的 HTTP 服务
 //! （默认 `127.0.0.1:8751`），也可以直接用它的 **BIT Remote** 入口 `/invoke`——
-//! 后者走的是 `{"params": {"action": "search", ...}}` 信封，
+//! 后者走的是 `{"tool_id":…, "tool":…, "invoked_by":…, "params":{…}}` 信封，
 //! 与 [BIT](https://github.com/yxpil/bit) 的工具调用协议同构。
 //!
 //! # 与长期记忆的分工
@@ -122,10 +122,7 @@ impl MemoryPool {
             .send(&req)
             .map_err(|e| PoolError::Http(e.to_string()))?;
         if !resp.is_success() {
-            return Err(PoolError::Status {
-                status: resp.status,
-                body: resp.body.chars().take(300).collect(),
-            });
+            return Err(error_from_response(&resp));
         }
         serde_json::from_str(&resp.body)
             .map_err(|e| PoolError::Decode(format!("{e}；正文：{}", truncate(&resp.body))))
@@ -140,10 +137,7 @@ impl MemoryPool {
             .send(&req)
             .map_err(|e| PoolError::Http(e.to_string()))?;
         if !resp.is_success() {
-            return Err(PoolError::Status {
-                status: resp.status,
-                body: resp.body.chars().take(300).collect(),
-            });
+            return Err(error_from_response(&resp));
         }
         if resp.body.trim().is_empty() {
             return Ok(serde_json::Value::Null);
@@ -153,10 +147,16 @@ impl MemoryPool {
     }
 
     /// 通过 BIT Remote 的 `/invoke` 信封发一条动作。
+    ///
+    /// 信封四件套（`tool_id` / `tool` / `invoked_by` / `params`）对齐 BIT
+    /// 官方约定——见 MemoryPool wiki 的 Protocol 一节与其集成测试
+    /// `serve_health_invoke_and_rest_api`：服务端按 `params.action` 路由
+    /// （缺失时回退顶层 `tool`），错误返回 `{"error": "<message>"}`。
     fn invoke(&self, action: &str, params: serde_json::Value) -> Result<serde_json::Value> {
         let body = serde_json::json!({
+            "tool_id": format!("styx-{}", self.name()),
             "tool": "memorypool",
-            "invoked_by": "styx",
+            "invoked_by": "agent:styx",
             "params": merge_action(action, params),
         });
         self.post("/invoke", body)
@@ -182,11 +182,12 @@ impl PoolPort for MemoryPool {
     }
 
     fn remember(&self, note: &MemoryNote) -> StyxResult<String> {
+        // wiki 约定：source 缺省是 "cli"，**agent 应当用 "bit"**
         let payload = serde_json::json!({
             "text": note.text,
             "tags": note.tags,
             "importance": note.importance,
-            "source": if note.source.is_empty() { "styx" } else { note.source.as_str() },
+            "source": if note.source.is_empty() { "bit" } else { note.source.as_str() },
         });
         let v = if self.cfg.use_remote {
             self.invoke("add", payload)?
@@ -250,6 +251,19 @@ impl PoolPort for MemoryPool {
 
 fn truncate(s: &str) -> String {
     s.chars().take(200).collect()
+}
+
+/// 把错误响应转成 [`PoolError::Status`]，优先提取 BIT 约定的
+/// `{"error": "<message>"}` 错误体（见 MemoryPool `serve.rs` 的 `error()`）。
+fn error_from_response(resp: &styx_http::HttpResponse) -> PoolError {
+    let detail = serde_json::from_str::<serde_json::Value>(&resp.body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+        .unwrap_or_else(|| resp.body.chars().take(300).collect());
+    PoolError::Status {
+        status: resp.status,
+        body: detail,
+    }
 }
 
 /// 把 MemoryPool 返回的 JSON（数组或 `{"memories": [...]}`）转成 [`Recalled`]。
@@ -359,6 +373,16 @@ pub fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    fn note(text: &str) -> MemoryNote {
+        MemoryNote {
+            text: text.to_string(),
+            tags: vec![],
+            importance: 0.5,
+            source: String::new(),
+        }
+    }
 
     #[test]
     fn percent_encoding_matches_rfc3986() {
@@ -408,6 +432,89 @@ mod tests {
         assert_eq!(v["action"], "search");
         assert_eq!(v["query"], "x");
         assert_eq!(v["limit"], 3);
+    }
+
+    #[test]
+    fn invoke_envelope_matches_bit_convention() {
+        use styx_http::{HttpTransport, HttpResponse};
+
+        // 记录请求体的假传输
+        struct FakeTransport {
+            status: u16,
+            body: &'static str,
+            seen: std::sync::Mutex<Vec<String>>,
+        }
+        impl HttpTransport for FakeTransport {
+            fn name(&self) -> &str {
+                "fake-pool"
+            }
+            fn send(
+                &self,
+                req: &styx_http::HttpRequest,
+            ) -> std::result::Result<HttpResponse, styx_http::HttpError> {
+                if let Some(b) = &req.body {
+                    self.seen.lock().unwrap().push(b.clone());
+                }
+                Ok(HttpResponse {
+                    status: self.status,
+                    headers: std::collections::BTreeMap::new(),
+                    body: self.body.to_string(),
+                })
+            }
+        }
+
+        // 对照 MemoryPool tests/cli.rs::serve_health_invoke_and_rest_api 的信封
+        let fake = Arc::new(FakeTransport {
+            status: 200,
+            body: r#"{"id":"m1","text":"x"}"#,
+            seen: std::sync::Mutex::new(Vec::new()),
+        });
+        let cfg = PoolConfig {
+            use_remote: true,
+            ..Default::default()
+        };
+        let pool = MemoryPool::new(cfg).with_transport(fake.clone());
+        let id = pool.remember(&note("x")).unwrap();
+        assert_eq!(id, "m1");
+        let body = fake.seen.lock().unwrap()[0].clone();
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["tool_id"], "styx-memorypool");
+        assert_eq!(v["tool"], "memorypool");
+        assert_eq!(v["invoked_by"], "agent:styx");
+        assert_eq!(v["params"]["action"], "add");
+        // wiki：agent 的 source 应当用 "bit"
+        assert_eq!(v["params"]["source"], "bit");
+    }
+
+    #[test]
+    fn error_body_message_is_extracted() {
+        use styx_http::{HttpTransport, HttpResponse};
+
+        struct Fake400;
+        impl HttpTransport for Fake400 {
+            fn name(&self) -> &str {
+                "fake-400"
+            }
+            fn send(
+                &self,
+                _req: &styx_http::HttpRequest,
+            ) -> std::result::Result<HttpResponse, styx_http::HttpError> {
+                Ok(HttpResponse {
+                    status: 400,
+                    headers: std::collections::BTreeMap::new(),
+                    body: r#"{"error":"unknown action: x"}"#.into(),
+                })
+            }
+        }
+        let cfg = PoolConfig {
+            use_remote: true,
+            ..Default::default()
+        };
+        let pool = MemoryPool::new(cfg).with_transport(Arc::new(Fake400));
+        let err = pool.stats().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown action: x"), "{msg}");
+        assert!(!msg.contains("{\"error\""), "不应残留 JSON 壳：{msg}");
     }
 
     #[test]

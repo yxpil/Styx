@@ -404,10 +404,18 @@ impl ToolPort for McpToolPort {
     }
 }
 
-/// BIT Remote 协议的工具桥：`POST {"params": {"action": ...}}`。
+/// BIT Remote 协议的工具桥：`POST {"tool_id":…, "tool":…, "invoked_by":…, "params":{…}}`。
+///
+/// 信封字段对齐 BIT 的官方约定（见 MemoryPool wiki 的 Protocol 一节与其
+/// `tests/cli.rs::serve_health_invoke_and_rest_api`）：
+/// - `tool_id`：BIT agent 用来路由的工具实例 id，服务端当前不读但信封要求携带；
+/// - `tool`：工具名，服务端在 `params.action` 缺失时回退读它；
+/// - `invoked_by`：调用方标识，官方测试用 `agent:<名字>` 风格。
 pub struct BitRemoteToolPort {
     url: String,
     tool: String,
+    tool_id: String,
+    invoked_by: String,
     token: String,
     timeout: Duration,
     transport: Arc<dyn HttpTransport>,
@@ -425,13 +433,28 @@ impl std::fmt::Debug for BitRemoteToolPort {
 impl BitRemoteToolPort {
     /// 新建。
     pub fn new(url: impl Into<String>, tool: impl Into<String>) -> Self {
+        let tool = tool.into();
         BitRemoteToolPort {
             url: url.into(),
-            tool: tool.into(),
+            tool_id: format!("styx-{tool}"),
+            tool,
+            invoked_by: "agent:styx".into(),
             token: String::new(),
             timeout: Duration::from_secs(30),
             transport: default_transport(),
         }
+    }
+
+    /// 覆盖 `tool_id`（BIT agent 用它路由工具实例）。
+    pub fn with_tool_id(mut self, id: impl Into<String>) -> Self {
+        self.tool_id = id.into();
+        self
+    }
+
+    /// 覆盖 `invoked_by`（调用方标识，官方风格是 `agent:<名字>`）。
+    pub fn with_invoked_by(mut self, who: impl Into<String>) -> Self {
+        self.invoked_by = who.into();
+        self
     }
 
     /// Bearer token。
@@ -449,8 +472,9 @@ impl BitRemoteToolPort {
     /// 把入参信封成 BIT Remote 载荷。
     pub fn envelope(&self, args: Value) -> Value {
         json!({
+            "tool_id": self.tool_id,
             "tool": self.tool,
-            "invoked_by": "styx",
+            "invoked_by": self.invoked_by,
             "params": args,
         })
     }
@@ -478,9 +502,14 @@ impl ToolPort for BitRemoteToolPort {
             .send(&req)
             .map_err(|e| StyxError::Tool(self.tool.clone(), e.to_string()))?;
         if !resp.is_success() {
+            // BIT 约定的错误体是 {"error": "<message>"}（见 MemoryPool serve.rs）
+            let detail = serde_json::from_str::<Value>(&resp.body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                .unwrap_or_else(|| resp.body.chars().take(200).collect());
             return Err(StyxError::Tool(
                 self.tool.clone(),
-                format!("返回 {}：{}", resp.status, resp.body.chars().take(200).collect::<String>()),
+                format!("返回 {}：{detail}", resp.status),
             ));
         }
         serde_json::from_str(&resp.body)
@@ -699,11 +728,21 @@ mod tests {
 
     #[test]
     fn bit_remote_envelope_shape() {
-        let port = BitRemoteToolPort::new("http://127.0.0.1:8751/invoke", "memorypool");
-        let env = port.envelope(json!({"action":"search","query":"x"}));
+        // 默认信封：四件套对齐 BIT 官方约定（MemoryPool wiki / tests/cli.rs）
+        let env = BitRemoteToolPort::new("http://127.0.0.1:8751/invoke", "memorypool")
+            .envelope(json!({"action":"search","query":"x"}));
+        assert_eq!(env["tool_id"], "styx-memorypool");
         assert_eq!(env["tool"], "memorypool");
-        assert_eq!(env["invoked_by"], "styx");
+        assert_eq!(env["invoked_by"], "agent:styx");
         assert_eq!(env["params"]["action"], "search");
+        // 两个字段都可覆盖
+        let custom = BitRemoteToolPort::new("http://x", "t")
+            .with_tool_id("tool-1")
+            .with_invoked_by("agent:test")
+            .envelope(json!({}));
+        assert_eq!(custom["tool_id"], "tool-1");
+        assert_eq!(custom["invoked_by"], "agent:test");
+        let port = BitRemoteToolPort::new("http://127.0.0.1:8751/invoke", "memorypool");
         assert_eq!(port.list().len(), 1);
         assert!(port.status().contains("bit:memorypool"));
     }

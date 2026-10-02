@@ -195,8 +195,14 @@ GET  /mem/search?q=…&limit=4
 
 ```json
 POST /invoke
-{"tool":"memorypool","invoked_by":"styx","params":{"action":"search","query":"…","limit":4}}
+{"tool_id":"styx-memorypool","tool":"memorypool","invoked_by":"agent:styx","params":{"action":"search","query":"…","limit":4}}
 ```
+
+信封四件套对齐 BIT 的官方约定（以 MemoryPool 的 `wiki/Protocol.md` 与
+`tests/cli.rs` 为准）：服务端按 `params.action` 路由（缺失时回退顶层
+`tool`），`invoked_by` 用 `agent:<名字>` 风格，写记忆时 `source` 按
+wiki 建议填 `"bit"`。错误响应是 `{"error":"<message>"}`，客户端会把
+它解析出来直接给你看，而不是甩一坨 JSON 壳。
 
 这个信封与 BIT 的工具调用协议同构，因此 MemoryPool 可以被 BIT 当作工具调用，
 也可以被 Styx 当作记忆池——**同一份服务，两个身份**。
