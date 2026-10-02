@@ -65,10 +65,10 @@ pub fn keyword_sql(keyword: &str, limit: usize) -> String {
     )
 }
 
-/// 最近的记忆（按 id 倒序，Nebula 的 SELECT 不支持 ORDER BY，用 id 近似时序）。
+/// 最近的记忆（按创建时间倒序）。
 pub fn recent_sql(limit: usize) -> String {
     format!(
-        "SELECT id, content, tags, importance, created_at FROM memories LIMIT {};",
+        "SELECT id, content, tags, importance, created_at FROM memories ORDER BY created_at DESC LIMIT {};",
         limit.max(1)
     )
 }
