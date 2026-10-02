@@ -100,6 +100,34 @@ pub fn read_reply(r: &mut impl BufRead) -> Result<Option<Reply>> {
             "期望 OK / ERR 帧，实际收到 {head:?}"
         )));
     };
+    let cols_part = cols_part.trim_start();
+
+    // 官方写回执：`OK affected=N` / `OK job=<id>`（见 mightbe-server
+    // `Response::to_wire` 的 Affected/Job 变体）。它们不是列名，必须
+    // 识别为 Ack，否则会被误读成名为 "affected=7" 的结果集。
+    if cols_part.starts_with("affected=") || cols_part.starts_with("job=") {
+        let mut info = Vec::new();
+        let ms;
+        loop {
+            let mut line = String::new();
+            let n = r
+                .read_line(&mut line)
+                .map_err(|e| AssocError::Io(format!("读响应帧失败：{e}")))?;
+            if n == 0 {
+                return Err(AssocError::Protocol("连接在 END 帧之前关闭".into()));
+            }
+            let line = line.trim_end_matches(['\r', '\n']).to_string();
+            if let Some(tail) = line.strip_prefix("END") {
+                ms = parse_end(tail);
+                break;
+            }
+            if let Some(rest) = line.strip_prefix("INFO") {
+                info.push(rest.trim().to_string());
+                continue;
+            }
+        }
+        return Ok(Some(Reply::Ack { info, ms }));
+    }
 
     let mut cols = split_cells(cols_part.trim_start());
     if cols.len() == 1 && cols[0].is_empty() {
