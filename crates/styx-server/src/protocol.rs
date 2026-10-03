@@ -213,7 +213,9 @@ mod tests {
 
         let r = Request::parse(r#"{"op":"remember","text":"x"}"#).unwrap();
         match r {
-            Request::Remember { tags, importance, .. } => {
+            Request::Remember {
+                tags, importance, ..
+            } => {
                 assert!(tags.is_empty());
                 assert!(importance.is_none());
             }

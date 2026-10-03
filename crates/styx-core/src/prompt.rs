@@ -333,7 +333,9 @@ impl<'a> PromptBuilder<'a> {
             self.stickers.map(|c| c.format_hint()).unwrap_or_default(),
             self.media.map(|m| m.format_hint()).unwrap_or_default()
         );
-        report.sections.insert("format".into(), estimate_tokens(&fmt));
+        report
+            .sections
+            .insert("format".into(), estimate_tokens(&fmt));
         system.push_str(&fmt);
 
         // ---- 消息序列 ----
@@ -634,7 +636,8 @@ mod tests {
     #[test]
     fn image_cost_is_counted_into_the_prompt_budget() {
         let text_only = vec![ChatMessage::user("看看这张图")];
-        let with_one = vec![ChatMessage::user("看看这张图").with_image("data:image/png;base64,AAAA")];
+        let with_one =
+            vec![ChatMessage::user("看看这张图").with_image("data:image/png;base64,AAAA")];
         let with_three = vec![ChatMessage::user("看看这张图").with_images([
             "data:image/png;base64,A",
             "data:image/png;base64,B",
@@ -734,7 +737,12 @@ mod tests {
             Recalled::new("2", "母亲留下了一张旧照片", 0.7, "nebula"),
         ];
         let assoc = vec![Association::new("相册", 0.8).with_confidence(0.9)];
-        let plan = build(&PromptBudget::default(), "我们去旧书店看看那本相册", &mem, &assoc);
+        let plan = build(
+            &PromptBudget::default(),
+            "我们去旧书店看看那本相册",
+            &mem,
+            &assoc,
+        );
 
         assert!(plan.system.contains("你是「林夏」"));
         assert!(plan.system.contains("外冷内热的旧书店主"));
@@ -778,7 +786,9 @@ mod tests {
         for i in 0..200 {
             mem.push(Recalled::new(
                 i.to_string(),
-                format!("第{i}条记忆：这是一段用来把记忆预算撑爆的长文本内容，重复重复重复重复重复"),
+                format!(
+                    "第{i}条记忆：这是一段用来把记忆预算撑爆的长文本内容，重复重复重复重复重复"
+                ),
                 1.0 - i as f32 * 0.001,
                 "nebula",
             ));

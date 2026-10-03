@@ -264,7 +264,10 @@ fn evidence_template_adds_text_from_extra_queries() {
 
     let seen = server.join().unwrap();
     assert_eq!(seen.len(), 2);
-    assert_eq!(seen[1], "SELECT text FROM EVIDENCE(doc_rnn, '相册') LIMIT 2;");
+    assert_eq!(
+        seen[1],
+        "SELECT text FROM EVIDENCE(doc_rnn, '相册') LIMIT 2;"
+    );
 }
 
 #[test]
@@ -285,7 +288,10 @@ fn err_frame_propagates_as_failure() {
     let assoc = assoc_at(&addr);
     let err = assoc.associate("照片", 5).unwrap_err();
     let msg = err.to_string();
-    assert!(msg.contains("3001") || msg.contains("network not found"), "{msg}");
+    assert!(
+        msg.contains("3001") || msg.contains("network not found"),
+        "{msg}"
+    );
 
     server.join().unwrap();
 }
@@ -326,14 +332,12 @@ fn map_rows_tolerates_column_renaming() {
 /// 静态检查：连接失败要给出可读的错误（而不是 panic 或吞掉）。
 #[test]
 fn unreachable_server_fails_with_clear_error() {
-    let err = MightBeAssoc::connect(
-        MightBeConfig {
-            addr: "127.0.0.1:1".into(),
-            timeout: Duration::from_secs(2),
-            auto_reconnect: false,
-            ..Default::default()
-        },
-    )
+    let err = MightBeAssoc::connect(MightBeConfig {
+        addr: "127.0.0.1:1".into(),
+        timeout: Duration::from_secs(2),
+        auto_reconnect: false,
+        ..Default::default()
+    })
     .unwrap_err();
     assert!(err.to_string().contains("127.0.0.1:1"), "{err}");
 }

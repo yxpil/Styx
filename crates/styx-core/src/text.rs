@@ -161,10 +161,10 @@ pub const STOPWORDS: &[&str] = &[
     "都", "也", "不", "很", "会", "要", "把", "被", "给", "对", "从", "到", "为", "着", "一个",
     "什么", "怎么", "这个", "那个", "自己", "已经", "还是", "但是", "因为", "所以", "然后", "如果",
     "可以", "没有", "知道", "觉得", "现在", "时候", "一样", "这样", "那样", // 英文
-    "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "in", "on", "at", "for", "with",
-    "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "i",
-    "you", "he", "she", "it", "we", "they", "this", "that", "these", "those", "as", "by", "from",
-    "not", "no", "yes", "so", "my", "your", "his", "her", "its", "our", "their",
+    "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "in", "on", "at", "for",
+    "with", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has",
+    "had", "i", "you", "he", "she", "it", "we", "they", "this", "that", "these", "those", "as",
+    "by", "from", "not", "no", "yes", "so", "my", "your", "his", "her", "its", "our", "their",
 ];
 
 /// 是否为停用词。

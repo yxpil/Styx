@@ -238,7 +238,10 @@ impl MediaLibrary {
 
     /// 从文件名列表构建（测试与程序化构造的入口）。
     pub fn from_files<S: AsRef<str>>(files: &[S]) -> Self {
-        let mut photos: Vec<Photo> = files.iter().filter_map(|f| Photo::from_file(f.as_ref())).collect();
+        let mut photos: Vec<Photo> = files
+            .iter()
+            .filter_map(|f| Photo::from_file(f.as_ref()))
+            .collect();
         photos.sort_by(|a, b| a.id.cmp(&b.id));
         photos.dedup_by(|a, b| a.id == b.id);
         let mut inner = Inner {

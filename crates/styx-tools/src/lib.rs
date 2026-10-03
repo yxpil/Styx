@@ -35,7 +35,7 @@ pub mod registry;
 pub mod mcp;
 
 pub use builtin::{
-    register_builtins, now_millis, AssociateTool, ClockTool, DiceTool, NoteTool, PickTool,
+    now_millis, register_builtins, AssociateTool, ClockTool, DiceTool, NoteTool, PickTool,
     RecallTool, SmallRng,
 };
 pub use registry::{ChainedTools, Tool, ToolRegistry};

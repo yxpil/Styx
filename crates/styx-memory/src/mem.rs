@@ -189,13 +189,10 @@ impl MemoryPort for InMemoryMemory {
                     Some(v) => *v as f32,
                     None => continue,
                 };
-                let df_t = inner
-                    .inverted
-                    .get(t)
-                    .map(|s| s.len() as f32)
-                    .unwrap_or(0.0);
+                let df_t = inner.inverted.get(t).map(|s| s.len() as f32).unwrap_or(0.0);
                 let idf = (1.0 + (n - df_t + 0.5) / (df_t + 0.5)).ln();
-                let denom = tf + self.params.k1 * (1.0 - self.params.b + self.params.b * e.len as f32 / avgdl);
+                let denom = tf
+                    + self.params.k1 * (1.0 - self.params.b + self.params.b * e.len as f32 / avgdl);
                 if denom <= 0.0 {
                     continue;
                 }
@@ -212,7 +209,11 @@ impl MemoryPort for InMemoryMemory {
             b.0.partial_cmp(&a.0)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 // 同分时新记忆优先
-                .then_with(|| inner.entries[b.1].created_at.cmp(&inner.entries[a.1].created_at))
+                .then_with(|| {
+                    inner.entries[b.1]
+                        .created_at
+                        .cmp(&inner.entries[a.1].created_at)
+                })
         });
 
         Ok(scored
@@ -250,10 +251,7 @@ impl MemoryPort for InMemoryMemory {
         }
 
         let mut ranked: Vec<(f32, usize)> = scores.into_iter().map(|(i, s)| (s, i)).collect();
-        ranked.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         Ok(ranked
             .into_iter()
             .take(limit)
@@ -355,10 +353,7 @@ mod tests {
 
     #[test]
     fn importance_breaks_ties() {
-        let m = mem_with(&[
-            ("旧照片 甲乙丙", 0.1, &[]),
-            ("旧照片 甲乙丙", 0.95, &[]),
-        ]);
+        let m = mem_with(&[("旧照片 甲乙丙", 0.1, &[]), ("旧照片 甲乙丙", 0.95, &[])]);
         let hits = m.recall("旧照片", 5).unwrap();
         assert_eq!(hits.len(), 2);
         assert!(hits[0].importance > hits[1].importance);
@@ -397,10 +392,7 @@ mod tests {
 
     #[test]
     fn forget_removes_and_reindexes() {
-        let m = mem_with(&[
-            ("第一条 关于照片", 0.5, &[]),
-            ("第二条 关于照片", 0.5, &[]),
-        ]);
+        let m = mem_with(&[("第一条 关于照片", 0.5, &[]), ("第二条 关于照片", 0.5, &[])]);
         assert_eq!(m.len(), 2);
         assert!(m.forget("1").unwrap());
         assert_eq!(m.len(), 1);

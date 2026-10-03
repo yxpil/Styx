@@ -214,7 +214,11 @@ impl InMemoryAssoc {
                 } else {
                     (b.clone(), a.clone())
                 };
-                *g.sup.entry(key.0.clone()).or_default().entry(key.1.clone()).or_insert(0.0) += 1.0;
+                *g.sup
+                    .entry(key.0.clone())
+                    .or_default()
+                    .entry(key.1.clone())
+                    .or_insert(0.0) += 1.0;
                 let evs = g.ev.entry(key).or_default();
                 if evs.len() < self.params.max_evidence && !evs.contains(&snippet) {
                     evs.push(snippet.clone());
@@ -273,8 +277,7 @@ impl InMemoryAssoc {
         let mut visited: HashSet<String> = seeds.iter().cloned().collect();
 
         // 第 0 跳：种子词（路径权重 1.0）
-        let mut frontier: Vec<(String, f64)> =
-            seeds.iter().map(|s| (s.clone(), 1.0)).collect();
+        let mut frontier: Vec<(String, f64)> = seeds.iter().map(|s| (s.clone(), 1.0)).collect();
 
         for hop in 1..=self.params.hops.max(1) {
             let mut next: Vec<(String, f64)> = Vec::new();
@@ -491,7 +494,9 @@ mod tests {
         // 这里是有意反向查一次：曾经只按传入顺序查表，
         // 「照」<「相」导致 `pair("相册", "照片")` 凭空查不到。
         let fwd = a.pair("照片", "相册").expect("照片↔相册 应当有边");
-        let rev = a.pair("相册", "照片").expect("相册↔照片 应当有边（拉平顺序后对称）");
+        let rev = a
+            .pair("相册", "照片")
+            .expect("相册↔照片 应当有边（拉平顺序后对称）");
         assert_eq!(fwd.0, rev.0, "两个方向读到的支撑数应当一致");
         assert!(fwd.0 >= 1.0);
         assert!(!fwd.2.is_empty(), "边应当带证据");

@@ -21,8 +21,8 @@ fn png_1px() -> Vec<u8> {
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1×1
         0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, // 8bit RGBA
         0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, // IDAT
-        0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
-        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82, // IEND
+        0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+        0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82, // IEND
     ]
 }
 
@@ -108,12 +108,7 @@ fn start() -> SocketAddr {
 }
 
 /// 发出一个请求，读回 (状态码, 响应头, body)。
-fn call(
-    addr: SocketAddr,
-    method: &str,
-    path: &str,
-    body: Option<&str>,
-) -> (u16, String, Vec<u8>) {
+fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&str>) -> (u16, String, Vec<u8>) {
     let mut s = TcpStream::connect(addr).expect("连接");
     s.set_read_timeout(Some(std::time::Duration::from_secs(20)))
         .ok();
@@ -251,11 +246,7 @@ fn say_without_text_is_a_400_not_a_crash() {
     let (status, _) = post_json(addr, "/api/say", r#"{"session":"test-empty"}"#);
     assert_eq!(status, 400);
 
-    let (status, _) = post_json(
-        addr,
-        "/api/say",
-        r#"{"text":"   ","session":"test-empty"}"#,
-    );
+    let (status, _) = post_json(addr, "/api/say", r#"{"text":"   ","session":"test-empty"}"#);
     assert_eq!(status, 400);
 
     // 服务本身还活着
@@ -334,7 +325,11 @@ fn sessions_do_not_share_a_transcript() {
 #[test]
 fn reset_sends_the_session_back_to_turn_zero() {
     let addr = start();
-    post_json(addr, "/api/say", r#"{"text":"第一句","session":"test-reset"}"#);
+    post_json(
+        addr,
+        "/api/say",
+        r#"{"text":"第一句","session":"test-reset"}"#,
+    );
     assert_eq!(get_json(addr, "/api/state?session=test-reset")["turn"], 1);
 
     let (status, v) = post_json(addr, "/api/reset", r#"{"session":"test-reset"}"#);
@@ -420,7 +415,8 @@ fn a_client_that_hangs_up_early_does_not_take_the_server_down() {
     // 半截请求头
     {
         let mut s = TcpStream::connect(addr).unwrap();
-        s.write_all(b"GET /api/state HTTP/1.1\r\nHost: x\r\n").unwrap();
+        s.write_all(b"GET /api/state HTTP/1.1\r\nHost: x\r\n")
+            .unwrap();
         s.flush().unwrap();
         drop(s);
     }

@@ -97,10 +97,12 @@ impl ChatBackend for OpenAiBackend {
         }
 
         let v: Value = serde_json::from_str(&resp.body).map_err(|e| {
-            LlmError::Decode(format!("{e}；正文：{}", resp.body.chars().take(200).collect::<String>()))
+            LlmError::Decode(format!(
+                "{e}；正文：{}",
+                resp.body.chars().take(200).collect::<String>()
+            ))
         })?;
-        let (text, prompt_tokens, completion_tokens) =
-            parse_chat_response(&v, &endpoint.name)?;
+        let (text, prompt_tokens, completion_tokens) = parse_chat_response(&v, &endpoint.name)?;
         let model = v
             .get("model")
             .and_then(|m| m.as_str())
@@ -377,7 +379,11 @@ mod tests {
     fn a_text_only_message_stays_a_plain_string() {
         let m = ChatMessage::user("在吗");
         assert!(!m.has_images());
-        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let body = build_body(
+            &Endpoint::new("ep", "https://x/v1", "m"),
+            &[m],
+            &LlmOptions::default(),
+        );
         assert!(
             body["messages"][0]["content"].is_string(),
             "纯文本必须编成字符串，实际是 {}",
@@ -385,20 +391,30 @@ mod tests {
         );
         // 序列化之后也不该冒出 `images` 字段
         let json = serde_json::to_string(&ChatMessage::user("x")).unwrap();
-        assert!(!json.contains("images"), "空 images 不该出现在 JSON 里：{json}");
+        assert!(
+            !json.contains("images"),
+            "空 images 不该出现在 JSON 里：{json}"
+        );
     }
 
     #[test]
     fn an_image_turns_the_message_into_a_content_array() {
         let m = ChatMessage::user("看看这个").with_image("data:image/jpeg;base64,AAAA");
-        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let body = build_body(
+            &Endpoint::new("ep", "https://x/v1", "m"),
+            &[m],
+            &LlmOptions::default(),
+        );
         let content = &body["messages"][0]["content"];
         assert!(content.is_array(), "带图必须展开成分段数组");
         assert_eq!(content[0]["type"], "text");
         assert_eq!(content[0]["text"], "看看这个");
         assert_eq!(content[1]["type"], "image_url");
         // data URL 原样透传，不解码不重编码
-        assert_eq!(content[1]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            "data:image/jpeg;base64,AAAA"
+        );
     }
 
     /// 图在前、话在后也允许；而**正文为空时绝不能发出空的 text 段**——
@@ -406,7 +422,11 @@ mod tests {
     #[test]
     fn an_empty_caption_yields_an_image_only_message() {
         let m = ChatMessage::user("").with_image("data:image/png;base64,BBBB");
-        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let body = build_body(
+            &Endpoint::new("ep", "https://x/v1", "m"),
+            &[m],
+            &LlmOptions::default(),
+        );
         let content = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 1, "空正文不该产生 text 段：{content:?}");
         assert_eq!(content[0]["type"], "image_url");
@@ -419,7 +439,11 @@ mod tests {
             "https://example.com/b.jpg",
             "data:image/png;base64,3",
         ]);
-        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let body = build_body(
+            &Endpoint::new("ep", "https://x/v1", "m"),
+            &[m],
+            &LlmOptions::default(),
+        );
         let content = body["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 4, "一段文字 + 三张图");
         let urls: Vec<&str> = content[1..]
@@ -444,7 +468,9 @@ mod tests {
         assert!(!m.has_images(), "旧格式没有 images 字段，应当默认成空");
         assert_eq!(m.content, "老的格式");
 
-        let with = serde_json::to_string(&ChatMessage::user("x").with_image("data:image/png;base64,A")).unwrap();
+        let with =
+            serde_json::to_string(&ChatMessage::user("x").with_image("data:image/png;base64,A"))
+                .unwrap();
         let back: ChatMessage = serde_json::from_str(&with).unwrap();
         assert_eq!(back.images, vec!["data:image/png;base64,A".to_string()]);
     }
@@ -492,7 +518,11 @@ mod tests {
             r#"{"error":{"message":"Rate limit reached for gpt-4o-mini","type":"rate_limit"}}"#,
         );
         let err = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap_err();
         let s = err.to_string();
         assert!(s.contains("429"), "{s}");
@@ -502,12 +532,13 @@ mod tests {
 
     #[test]
     fn error_field_inside_a_200_also_fails() {
-        let (b, _t) = backend_with(
-            200,
-            r#"{"error":{"message":"model not found"}}"#,
-        );
+        let (b, _t) = backend_with(200, r#"{"error":{"message":"model not found"}}"#);
         let err = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("model not found"));
     }
@@ -516,7 +547,11 @@ mod tests {
     fn empty_completion_is_an_error() {
         let (b, _t) = backend_with(200, r#"{"choices":[{"message":{"content":"   "}}]}"#);
         let err = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap_err();
         assert!(matches!(err, LlmError::EmptyCompletion { .. }), "{err:?}");
     }
@@ -525,7 +560,11 @@ mod tests {
     fn missing_choices_is_a_decode_error() {
         let (b, _t) = backend_with(200, r#"{"object":"chat.completion"}"#);
         let err = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap_err();
         assert!(err.to_string().contains("choices"), "{err}");
     }
@@ -536,7 +575,11 @@ mod tests {
             {"type":"text","text":"[说] "},{"type":"text","text":"不卖。"}]}}]}"#;
         let (b, _t) = backend_with(200, body);
         let c = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap();
         assert_eq!(c.text, "[说] 不卖。");
     }
@@ -545,7 +588,11 @@ mod tests {
     fn legacy_text_field_is_accepted() {
         let (b, _t) = backend_with(200, r#"{"choices":[{"text":"旧式补全"}]}"#);
         let c = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap();
         assert_eq!(c.text, "旧式补全");
     }
@@ -555,7 +602,11 @@ mod tests {
         let body = r#"{"choices":[{"message":{"content":"","reasoning_content":"思考过程"}}]}"#;
         let (b, _t) = backend_with(200, body);
         let c = b
-            .chat(&Endpoint::new("ep", "http://h/v1", "m"), &msgs(), &LlmOptions::default())
+            .chat(
+                &Endpoint::new("ep", "http://h/v1", "m"),
+                &msgs(),
+                &LlmOptions::default(),
+            )
             .unwrap();
         assert_eq!(c.text, "思考过程");
     }

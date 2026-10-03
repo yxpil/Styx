@@ -205,10 +205,8 @@ impl McpClient {
             .with_bearer(&self.token);
         // MCP Streamable HTTP 要求客户端同时接受 JSON 与 SSE
         req = req.with_header("Accept", "application/json, text/event-stream");
-        req.headers.push((
-            "MCP-Protocol-Version".into(),
-            "2025-06-18".into(),
-        ));
+        req.headers
+            .push(("MCP-Protocol-Version".into(), "2025-06-18".into()));
         if let Ok(s) = self.session.lock() {
             if let Some(sid) = s.as_ref() {
                 req = req.with_header("Mcp-Session-Id", sid.clone());
@@ -644,10 +642,8 @@ mod tests {
     fn session_id_from_initialize_is_reused() {
         let init = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18"}}"#;
         let tools = r#"{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}"#;
-        let t = FakeTransport::new(vec![(200, init), (200, tools)]).with_header(
-            "mcp-session-id",
-            "sess-123",
-        );
+        let t = FakeTransport::new(vec![(200, init), (200, tools)])
+            .with_header("mcp-session-id", "sess-123");
         let c = client(t.clone());
         c.initialize().unwrap();
         let _ = c.list_tools();
@@ -750,7 +746,8 @@ mod tests {
     #[test]
     fn bit_remote_invoke_round_trip() {
         let t = FakeTransport::new(vec![(200, r#"{"count":1,"results":[]}"#)]);
-        let port = BitRemoteToolPort::new("http://h/invoke", "memorypool").with_transport(t.clone());
+        let port =
+            BitRemoteToolPort::new("http://h/invoke", "memorypool").with_transport(t.clone());
         let out = port
             .invoke("memorypool", json!({"action":"search","query":"x"}))
             .unwrap();

@@ -36,7 +36,7 @@ use crate::ports::{
     PoolPort, Recalled, ToolPort,
 };
 use crate::prompt::{PromptBudget, PromptBuilder, PromptReport};
-use crate::protocol::{continuation_prompt, DirectiveOutcome, DirectiveKind};
+use crate::protocol::{continuation_prompt, DirectiveKind, DirectiveOutcome};
 use crate::reply::Reply;
 use crate::scene::Scene;
 use crate::session::{Audit, Guard, Session};
@@ -260,7 +260,11 @@ impl TurnOutcome {
             "turn {} · {} · 审核{} · 重试{} · 取资料{} · 写记忆{} · {}",
             self.turn,
             self.report.render(),
-            if self.audit.needs_retry() { "有违规" } else { "通过" },
+            if self.audit.needs_retry() {
+                "有违规"
+            } else {
+                "通过"
+            },
             self.retries,
             self.directives.len(),
             self.memory_written,
@@ -451,7 +455,8 @@ impl Kernel {
         self.session.state = crate::state::DynamicState::default();
         self.pending_reminders.clear();
         self.last_audit = Audit::default();
-        self.session.push(EventKind::System, "system", "（这一场戏重新开始）");
+        self.session
+            .push(EventKind::System, "system", "（这一场戏重新开始）");
     }
 
     /// 后端状态。
@@ -633,8 +638,11 @@ impl Kernel {
         }
 
         // 用户输入入账（在提示词装配之后，保证历史不重复）
-        let mut input_event =
-            Event::new(EventKind::UserInput, self.config.user_name.clone(), user_input);
+        let mut input_event = Event::new(
+            EventKind::UserInput,
+            self.config.user_name.clone(),
+            user_input,
+        );
         match incoming {
             // 编号进 meta：前端靠它把气泡渲染成图片，而不是一句转述
             Incoming::Sticker(st) => {
@@ -714,7 +722,8 @@ impl Kernel {
                 .push(EventKind::Action, actor.clone(), a.clone());
         }
         for s in &reply.speech {
-            self.session.push(EventKind::Speech, actor.clone(), s.clone());
+            self.session
+                .push(EventKind::Speech, actor.clone(), s.clone());
         }
         for t in &reply.thoughts {
             self.session
@@ -828,7 +837,9 @@ impl Kernel {
                 Ok(c) => c,
                 Err(e) => {
                     // 取资料之后的续写失败：不能把只剩指令的半成品当回复
-                    notices.push(format!("取到资料后的续写失败（{e}），本回合按资料前的输出展示"));
+                    notices.push(format!(
+                        "取到资料后的续写失败（{e}），本回合按资料前的输出展示"
+                    ));
                     break;
                 }
             };
@@ -850,7 +861,11 @@ impl Kernel {
     /// - **同一条指令只执行一次**：模型常把 `[回忆] 照片` 写两遍；
     /// - **查不到不是错误**：返回一条 `empty`，让模型老实说"想不起来"；
     /// - **后端报错也不中断回合**：降级成 `failed`，表演照常进行。
-    fn execute_directives(&self, reply: &Reply, notices: &mut Vec<String>) -> Vec<DirectiveOutcome> {
+    fn execute_directives(
+        &self,
+        reply: &Reply,
+        notices: &mut Vec<String>,
+    ) -> Vec<DirectiveOutcome> {
         let mut out: Vec<DirectiveOutcome> = Vec::new();
         let mut seen: Vec<(DirectiveKind, String)> = Vec::new();
         for d in &reply.directives {
@@ -858,10 +873,7 @@ impl Kernel {
                 continue;
             }
             seen.push((d.kind, d.query.clone()));
-            let limit = d
-                .limit
-                .unwrap_or(self.config.directive_limit)
-                .clamp(1, 20);
+            let limit = d.limit.unwrap_or(self.config.directive_limit).clamp(1, 20);
             let outcome = match d.kind {
                 DirectiveKind::Recall => match self.memory.recall(&d.query, limit) {
                     Ok(list) => {
@@ -888,7 +900,12 @@ impl Kernel {
                                 if a.evidence.is_empty() {
                                     format!("{}（{:.2}）", a.word, a.score)
                                 } else {
-                                    format!("{}（{:.2}；{}）", a.word, a.score, a.evidence.join("、"))
+                                    format!(
+                                        "{}（{:.2}；{}）",
+                                        a.word,
+                                        a.score,
+                                        a.evidence.join("、")
+                                    )
                                 }
                             })
                             .collect();
@@ -1417,7 +1434,12 @@ mod tests {
             Ok("1".into())
         }
         fn recall(&self, _q: &str, _l: usize) -> Result<Vec<Recalled>> {
-            Ok(vec![Recalled::new("p1", "陈默昨天在城南见过林夏", 0.5, "pool")])
+            Ok(vec![Recalled::new(
+                "p1",
+                "陈默昨天在城南见过林夏",
+                0.5,
+                "pool",
+            )])
         }
         fn stats(&self) -> Result<PoolStats> {
             Ok(PoolStats {
@@ -1533,10 +1555,7 @@ mod tests {
 
     #[test]
     fn user_input_is_not_duplicated_in_history() {
-        let (mut k, _llm, _mem, _assoc) = kernel_with(vec![
-            "[说] 不卖。",
-            "[说] 第二句。",
-        ]);
+        let (mut k, _llm, _mem, _assoc) = kernel_with(vec!["[说] 不卖。", "[说] 第二句。"]);
         k.turn("第一句输入").unwrap();
         let out = k.turn("第二句输入").unwrap();
         // 历史里用户输入只应出现一次
@@ -1787,10 +1806,8 @@ mod tests {
 
     #[test]
     fn sticker_from_the_model_becomes_an_event_with_its_label() {
-        let (mut k, _llm) = kernel_with_catalog(
-            vec!["[表情] cry_03\n[说] 别哭。"],
-            KernelConfig::default(),
-        );
+        let (mut k, _llm) =
+            kernel_with_catalog(vec!["[表情] cry_03\n[说] 别哭。"], KernelConfig::default());
         let out = k.turn("我可能要走了。").unwrap();
         assert_eq!(out.reply.stickers, vec!["cry_03".to_string()]);
         assert_eq!(out.retries, 0);
@@ -2186,7 +2203,8 @@ mod tests {
 
     #[test]
     fn without_a_media_library_images_are_dropped() {
-        let (mut k, _llm) = kernel_with_catalog(vec!["[图片] a.png\n[说] 嗯。"], KernelConfig::default());
+        let (mut k, _llm) =
+            kernel_with_catalog(vec!["[图片] a.png\n[说] 嗯。"], KernelConfig::default());
         let out = k.turn("看看。").unwrap();
         assert!(out.sent_images.is_empty());
         assert!(
@@ -2270,7 +2288,13 @@ mod tests {
 
     #[test]
     fn show_image_without_a_library_explains_why() {
-        let (mut k, _llm, _mem) = kernel_rich(vec!["[说] 哦。"], KernelConfig::default(), Vec::new(), &[], &[]);
+        let (mut k, _llm, _mem) = kernel_rich(
+            vec!["[说] 哦。"],
+            KernelConfig::default(),
+            Vec::new(),
+            &[],
+            &[],
+        );
         let err = k.show_image("a", None).unwrap_err();
         assert!(err.to_string().contains("图片素材库"), "{err}");
         assert_eq!(k.state().turn, 0, "失败的调用不该推进回合");
@@ -2336,7 +2360,11 @@ mod tests {
 
         k.reset();
         assert_eq!(k.state().turn, 0);
-        assert_eq!(k.session().transcript.len(), 1, "只留一条「重新开始」的记号");
+        assert_eq!(
+            k.session().transcript.len(),
+            1,
+            "只留一条「重新开始」的记号"
+        );
         assert_eq!(k.card().name, "林夏");
     }
 

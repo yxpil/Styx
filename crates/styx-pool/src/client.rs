@@ -273,7 +273,10 @@ pub fn json_to_recalled_list(v: &serde_json::Value, origin: &str) -> Vec<Recalle
         serde_json::Value::Object(o) => {
             for key in ["memories", "results", "data", "items"] {
                 if let Some(a) = o.get(key).and_then(|x| x.as_array()) {
-                    return a.iter().filter_map(|x| json_to_recalled(x, origin)).collect();
+                    return a
+                        .iter()
+                        .filter_map(|x| json_to_recalled(x, origin))
+                        .collect();
                 }
             }
             // 单条对象
@@ -281,7 +284,9 @@ pub fn json_to_recalled_list(v: &serde_json::Value, origin: &str) -> Vec<Recalle
         }
         _ => return Vec::new(),
     };
-    arr.iter().filter_map(|x| json_to_recalled(x, origin)).collect()
+    arr.iter()
+        .filter_map(|x| json_to_recalled(x, origin))
+        .collect()
 }
 
 fn json_to_recalled(v: &serde_json::Value, origin: &str) -> Option<Recalled> {
@@ -302,10 +307,7 @@ fn json_to_recalled(v: &serde_json::Value, origin: &str) -> Option<Recalled> {
             .to_string(),
         text,
         score: o.get("score").and_then(|x| x.as_f64()).unwrap_or(0.0) as f32,
-        importance: o
-            .get("importance")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.5) as f32,
+        importance: o.get("importance").and_then(|x| x.as_f64()).unwrap_or(0.5) as f32,
         tags: o
             .get("tags")
             .and_then(|x| x.as_array())
@@ -315,10 +317,11 @@ fn json_to_recalled(v: &serde_json::Value, origin: &str) -> Option<Recalled> {
                     .collect()
             })
             .unwrap_or_default(),
-        created_at: o
-            .get("created_at")
-            .and_then(|x| x.as_i64())
-            .or_else(|| o.get("created_at").and_then(|x| x.as_str()).and_then(parse_rfc3339_ms)),
+        created_at: o.get("created_at").and_then(|x| x.as_i64()).or_else(|| {
+            o.get("created_at")
+                .and_then(|x| x.as_str())
+                .and_then(parse_rfc3339_ms)
+        }),
         origin: origin.to_string(),
     })
 }
@@ -368,7 +371,6 @@ pub fn percent_encode(s: &str) -> String {
     }
     out
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -436,7 +438,7 @@ mod tests {
 
     #[test]
     fn invoke_envelope_matches_bit_convention() {
-        use styx_http::{HttpTransport, HttpResponse};
+        use styx_http::{HttpResponse, HttpTransport};
 
         // 记录请求体的假传输
         struct FakeTransport {
@@ -488,7 +490,7 @@ mod tests {
 
     #[test]
     fn error_body_message_is_extracted() {
-        use styx_http::{HttpTransport, HttpResponse};
+        use styx_http::{HttpResponse, HttpTransport};
 
         struct Fake400;
         impl HttpTransport for Fake400 {
@@ -519,7 +521,10 @@ mod tests {
 
     #[test]
     fn rfc3339_parsing() {
-        assert_eq!(parse_rfc3339_ms("2026-01-01T00:00:00Z"), Some(1_767_225_600_000));
+        assert_eq!(
+            parse_rfc3339_ms("2026-01-01T00:00:00Z"),
+            Some(1_767_225_600_000)
+        );
         assert_eq!(parse_rfc3339_ms("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(parse_rfc3339_ms("garbage"), None);
     }

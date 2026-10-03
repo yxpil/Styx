@@ -352,7 +352,11 @@ pub struct Completion {
 }
 
 impl Completion {
-    pub fn new(text: impl Into<String>, model: impl Into<String>, endpoint: impl Into<String>) -> Self {
+    pub fn new(
+        text: impl Into<String>,
+        model: impl Into<String>,
+        endpoint: impl Into<String>,
+    ) -> Self {
         Completion {
             text: text.into(),
             model: model.into(),

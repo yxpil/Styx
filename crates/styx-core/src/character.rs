@@ -173,9 +173,9 @@ impl CharacterCard {
             let items: Vec<String> = lines
                 .iter()
                 .filter_map(|l| {
-                    l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")).map(|s| {
-                        s.trim().to_string()
-                    })
+                    l.strip_prefix("- ")
+                        .or_else(|| l.strip_prefix("* "))
+                        .map(|s| s.trim().to_string())
                 })
                 .collect();
             match normalize_section(section).as_str() {
@@ -394,7 +394,10 @@ fn parse_lore(lines: &[String]) -> Vec<LoreEntry> {
         let mut parts = body.split("::").map(|p| p.trim());
         let Some(keys) = parts.next() else { continue };
         let Some(text) = parts.next() else { continue };
-        let priority = parts.next().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+        let priority = parts
+            .next()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
         let keys: Vec<String> = keys
             .split([',', '，'])
             .map(|k| k.trim().to_string())

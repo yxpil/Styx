@@ -35,8 +35,8 @@ pub const SALT_LEN: usize = 16;
 /// 参数与 `nebula-crypto::derive_master_key` 完全一致；
 /// 派生一次约 50~200 ms，对交互式连接是可接受的成本。
 pub fn derive_master_key(password: &str, salt: &[u8; SALT_LEN]) -> [u8; KEY_LEN] {
-    let params = argon2::Params::new(19 * 1024, 2, 1, Some(KEY_LEN))
-        .expect("固定的 argon2 参数一定合法");
+    let params =
+        argon2::Params::new(19 * 1024, 2, 1, Some(KEY_LEN)).expect("固定的 argon2 参数一定合法");
     let argon = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
     let mut key = [0u8; KEY_LEN];
     argon
@@ -112,13 +112,7 @@ pub fn open(key: &[u8; KEY_LEN], blob: &[u8], aad: &[u8]) -> Result<Vec<u8>, Str
     nonce.copy_from_slice(nonce_bytes);
     let cipher = ChaCha20Poly1305::new(key.into());
     cipher
-        .decrypt(
-            &nonce.into(),
-            Payload {
-                msg: rest,
-                aad,
-            },
-        )
+        .decrypt(&nonce.into(), Payload { msg: rest, aad })
         .map_err(|_| "AEAD 认证失败".to_string())
 }
 

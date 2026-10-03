@@ -22,8 +22,8 @@ use std::time::Duration;
 use styx_core::ports::{AssocPort, Association};
 
 use crate::error::{AssocError, Result};
-use styx_core::error::Result as StyxResult;
 use crate::wire::MightBeClient;
+use styx_core::error::Result as StyxResult;
 
 /// MightBe 连接配置。
 #[derive(Debug, Clone)]
@@ -47,8 +47,7 @@ impl Default for MightBeConfig {
         MightBeConfig {
             addr: "127.0.0.1:9527".into(),
             network: "doc_rnn".into(),
-            query_template: "SELECT word, score FROM ASSOCIATE({net}, {seed}) LIMIT {limit}"
-                .into(),
+            query_template: "SELECT word, score FROM ASSOCIATE({net}, {seed}) LIMIT {limit}".into(),
             evidence_template: None,
             timeout: Duration::from_secs(10),
             auto_reconnect: true,
@@ -272,10 +271,7 @@ pub fn map_rows(cols: &[String], rows: &[Vec<String>]) -> Vec<Association> {
         let Some(word) = get(i_word) else {
             // 只有一列时，把第一列当词
             if row.len() == 1 && !row[0].is_empty() {
-                out.push(Association::new(
-                    row[0].clone(),
-                    1.0 / (n as f32 + 1.0),
-                ));
+                out.push(Association::new(row[0].clone(), 1.0 / (n as f32 + 1.0)));
             }
             continue;
         };
@@ -318,7 +314,6 @@ fn normalize_confidence(c: f32) -> f32 {
         c.clamp(0.0, 1.0)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -396,7 +391,10 @@ mod tests {
 
     #[test]
     fn single_column_result_is_accepted() {
-        let got = map_rows(&["word".to_string()], &[vec!["甲".into()], vec!["乙".into()]]);
+        let got = map_rows(
+            &["word".to_string()],
+            &[vec!["甲".into()], vec!["乙".into()]],
+        );
         assert_eq!(got.len(), 2);
         assert_eq!(got[0].word, "甲");
         assert!(got[0].score > got[1].score);

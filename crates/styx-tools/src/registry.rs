@@ -116,7 +116,10 @@ pub struct ChainedTools {
 impl std::fmt::Debug for ChainedTools {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ChainedTools")
-            .field("ports", &self.ports.iter().map(|p| p.name()).collect::<Vec<_>>())
+            .field(
+                "ports",
+                &self.ports.iter().map(|p| p.name()).collect::<Vec<_>>(),
+            )
             .finish()
     }
 }
@@ -207,7 +210,9 @@ mod tests {
 
         let specs = r.list();
         assert_eq!(specs.len(), 2);
-        assert!(specs.iter().any(|s| s.name == "echo" && s.description == "原样返回入参"));
+        assert!(specs
+            .iter()
+            .any(|s| s.name == "echo" && s.description == "原样返回入参"));
 
         let out = r.invoke("echo", json!({"text":"hi"})).unwrap();
         assert_eq!(out["echoed"]["text"], "hi");

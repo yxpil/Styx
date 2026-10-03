@@ -111,11 +111,7 @@ impl Response {
     pub fn cell(&self, row: usize, column: &str) -> Option<&str> {
         let cols = self.columns.as_ref()?;
         let idx = cols.iter().position(|c| c == column)?;
-        self.rows
-            .as_ref()?
-            .get(row)?
-            .get(idx)
-            .map(|s| s.as_str())
+        self.rows.as_ref()?.get(row)?.get(idx).map(|s| s.as_str())
     }
 }
 
@@ -207,8 +203,8 @@ pub fn write_frame(
         )));
     }
     let blob = seal(key, payload, &frame_aad(dir, seq));
-    let len = u32::try_from(blob.len())
-        .map_err(|_| MemoryError::Protocol("帧长度超出 u32".into()))?;
+    let len =
+        u32::try_from(blob.len()).map_err(|_| MemoryError::Protocol("帧长度超出 u32".into()))?;
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&blob)?;
     stream.flush()?;
@@ -281,12 +277,7 @@ impl NebulaClient {
     }
 
     /// 以指定用户连接并完成 v2 认证。
-    pub fn connect_as(
-        addr: &str,
-        user: &str,
-        password: &str,
-        timeout: Duration,
-    ) -> Result<Self> {
+    pub fn connect_as(addr: &str, user: &str, password: &str, timeout: Duration) -> Result<Self> {
         let mut stream = TcpStream::connect(addr)
             .map_err(|e| MemoryError::Io(format!("无法连接 Nebula 服务 {addr}：{e}")))?;
         stream.set_read_timeout(Some(timeout)).ok();
@@ -361,15 +352,16 @@ impl NebulaClient {
     /// 发送一个请求并等待响应。
     fn request(&mut self, req: &Request) -> Result<Response> {
         let payload = serde_json::to_vec(req)?;
-        write_frame(&mut self.stream, &self.key, Direction::Up, self.send_seq, &payload)?;
-        self.send_seq += 1;
-
-        let resp_payload = read_frame(
+        write_frame(
             &mut self.stream,
             &self.key,
-            Direction::Down,
-            self.recv_seq,
+            Direction::Up,
+            self.send_seq,
+            &payload,
         )?;
+        self.send_seq += 1;
+
+        let resp_payload = read_frame(&mut self.stream, &self.key, Direction::Down, self.recv_seq)?;
         self.recv_seq += 1;
         let resp: Response = serde_json::from_slice(&resp_payload).map_err(|e| {
             MemoryError::Protocol(format!(
@@ -382,8 +374,10 @@ impl NebulaClient {
 
     /// 执行一条 SQL（SQL 逻辑错误以 Err 返回，连接不受影响）。
     pub fn sql(&mut self, sql: &str) -> Result<Response> {
-        self.request(&Request::Sql { sql: sql.to_string() })?
-            .into_result()
+        self.request(&Request::Sql {
+            sql: sql.to_string(),
+        })?
+        .into_result()
     }
 
     /// 执行一条查询并返回 `(列名, 行)`。

@@ -106,16 +106,10 @@ fn fmt_f32(v: f32) -> String {
 ///
 /// `origin` 用于标记来源（`"nebula"`）。列名匹配是**宽松**的：
 /// 大小写不敏感，且对同一语义接受多个别名。
-pub fn rows_to_recalled(
-    columns: &[String],
-    rows: &[Vec<String>],
-    origin: &str,
-) -> Vec<Recalled> {
+pub fn rows_to_recalled(columns: &[String], rows: &[Vec<String>], origin: &str) -> Vec<Recalled> {
     let lower: Vec<String> = columns.iter().map(|c| c.to_lowercase()).collect();
     let idx = |names: &[&str]| -> Option<usize> {
-        names
-            .iter()
-            .find_map(|n| lower.iter().position(|c| c == n))
+        names.iter().find_map(|n| lower.iter().position(|c| c == n))
     };
     let i_id = idx(&["id", "memory_id", "rowid"]);
     let i_text = idx(&["content", "text", "body", "memory"]);
@@ -215,7 +209,9 @@ mod tests {
             .with_importance(0.87654)
             .with_source("styx:林夏");
         let sql = insert_sql(&n);
-        assert!(sql.starts_with("INSERT INTO memories (content, tags, source, importance) VALUES ("));
+        assert!(
+            sql.starts_with("INSERT INTO memories (content, tags, source, importance) VALUES (")
+        );
         assert!(sql.contains("'it''s a test\\nline2'"));
         assert!(sql.contains("'a, b'"));
         assert!(sql.contains("'styx:林夏'"));
@@ -288,7 +284,11 @@ mod tests {
 
     #[test]
     fn tolerates_renamed_columns_and_missing_score() {
-        let cols = vec!["memory_id".to_string(), "text".to_string(), "weight".to_string()];
+        let cols = vec![
+            "memory_id".to_string(),
+            "text".to_string(),
+            "weight".to_string(),
+        ];
         let rows = vec![
             vec!["a".into(), "第一条".into(), "0.8".into()],
             vec!["b".into(), "第二条".into(), "0.4".into()],
@@ -317,7 +317,10 @@ mod tests {
     fn timestamp_parsing_variants() {
         assert_eq!(parse_timestamp("1735689600000"), Some(1_735_689_600_000));
         assert_eq!(parse_timestamp("1735689600"), Some(1_735_689_600_000));
-        assert_eq!(parse_timestamp("2025-01-01T00:00:00"), Some(1_735_689_600_000));
+        assert_eq!(
+            parse_timestamp("2025-01-01T00:00:00"),
+            Some(1_735_689_600_000)
+        );
         assert_eq!(parse_timestamp(""), None);
         assert_eq!(parse_timestamp("not-a-date"), None);
     }

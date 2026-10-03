@@ -31,10 +31,7 @@ pub enum Reply {
         ms: u128,
     },
     /// 写操作回执。
-    Ack {
-        info: Vec<String>,
-        ms: u128,
-    },
+    Ack { info: Vec<String>, ms: u128 },
     /// 错误。
     Error { code: u16, message: String },
 }
@@ -59,9 +56,7 @@ impl Reply {
     /// 转成 `Result`。
     pub fn into_result(self) -> Result<Self> {
         match self {
-            Reply::Error { code, message } => {
-                Err(AssocError::Server { code, message })
-            }
+            Reply::Error { code, message } => Err(AssocError::Server { code, message }),
             ok => Ok(ok),
         }
     }
@@ -272,9 +267,11 @@ mod tests {
 
     #[test]
     fn parses_result_set() {
-        let r = reply_from("OK word|score|confidence\n所有权|0.87|0.91\n借用|0.62|0.55\nEND (rows=2, ms=7)\n")
-            .unwrap()
-            .unwrap();
+        let r = reply_from(
+            "OK word|score|confidence\n所有权|0.87|0.91\n借用|0.62|0.55\nEND (rows=2, ms=7)\n",
+        )
+        .unwrap()
+        .unwrap();
         let (cols, rows) = r.into_rows();
         assert_eq!(cols, vec!["word", "score", "confidence"]);
         assert_eq!(rows.len(), 2);
@@ -298,7 +295,9 @@ mod tests {
 
     #[test]
     fn parses_error_frame() {
-        let r = reply_from("ERR 1146 unknown network 'doc_rnn'\n").unwrap().unwrap();
+        let r = reply_from("ERR 1146 unknown network 'doc_rnn'\n")
+            .unwrap()
+            .unwrap();
         match r {
             Reply::Error { code, message } => {
                 assert_eq!(code, 1146);
@@ -370,7 +369,10 @@ mod tests {
                 if r.read_line(&mut line).unwrap_or(0) == 0 {
                     break;
                 }
-                assert!(line.trim_end().ends_with(';'), "语句必须以 ; 结尾：{line:?}");
+                assert!(
+                    line.trim_end().ends_with(';'),
+                    "语句必须以 ; 结尾：{line:?}"
+                );
                 if line.contains("ASSOCIATE") {
                     s.write_all("OK word|score\n照片|0.9\nEND (rows=1, ms=2)\n".as_bytes())
                         .unwrap();
@@ -380,9 +382,14 @@ mod tests {
             }
         });
 
-        let mut c = MightBeClient::connect(&format!("127.0.0.1:{}", addr.port()), Duration::from_secs(3))
+        let mut c = MightBeClient::connect(
+            &format!("127.0.0.1:{}", addr.port()),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        let (cols, rows) = c
+            .rows("SELECT word, score FROM ASSOCIATE(nt, 'x')")
             .unwrap();
-        let (cols, rows) = c.rows("SELECT word, score FROM ASSOCIATE(nt, 'x')").unwrap();
         assert_eq!(cols, vec!["word", "score"]);
         assert_eq!(rows[0][0], "照片");
 

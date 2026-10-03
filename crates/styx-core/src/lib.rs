@@ -74,7 +74,7 @@ pub use session::{Audit, Guard, Session};
 pub use state::{DynamicState, Mood, StateDelta};
 pub use sticker::{Sticker, StickerCatalog};
 pub use text::{estimate_tokens, keywords, summarize, truncate_to_tokens};
-pub use voice::{SpeechRequest, SpeechSynthesizer, Transcript, Transcriber, VoiceInfo};
+pub use voice::{SpeechRequest, SpeechSynthesizer, Transcriber, Transcript, VoiceInfo};
 
 /// 内核版本。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

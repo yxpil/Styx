@@ -19,9 +19,9 @@ use std::time::Duration;
 use styx_core::ports::{MemoryNote, MemoryPort, Recalled};
 
 use crate::error::{MemoryError, Result};
-use styx_core::error::Result as StyxResult;
 use crate::schema;
 use crate::wire::NebulaClient;
+use styx_core::error::Result as StyxResult;
 
 /// Nebula 连接配置。
 #[derive(Debug, Clone)]
@@ -103,12 +103,7 @@ impl NebulaMemory {
                 "未提供 Nebula 密码（可用配置项或环境变量 NEBULA_PASSWORD）".into(),
             ));
         }
-        let client = NebulaClient::connect_as(
-            &cfg.addr,
-            &cfg.user,
-            &cfg.password,
-            cfg.timeout,
-        )?;
+        let client = NebulaClient::connect_as(&cfg.addr, &cfg.user, &cfg.password, cfg.timeout)?;
         Ok(NebulaMemory {
             cfg,
             inner: Mutex::new(Some(client)),
@@ -300,7 +295,6 @@ pub fn parse_inserted_id(message: &str) -> Option<String> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,7 +354,10 @@ mod tests {
         let e: StyxError = MemoryError::Sql("bad sql".into()).into();
         assert!(matches!(e, StyxError::Memory(_)));
         let e: StyxError = MemoryError::Offline("down".into()).into();
-        assert!(matches!(e, StyxError::PortUnavailable { port: "memory", .. }));
+        assert!(matches!(
+            e,
+            StyxError::PortUnavailable { port: "memory", .. }
+        ));
         assert!(e.is_degradable());
     }
 }

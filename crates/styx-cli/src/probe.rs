@@ -14,9 +14,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use styx_core::ports::{ChatMessage, LlmPort, LlmOptions};
+use styx_core::ports::{ChatMessage, LlmOptions, LlmPort};
 use styx_llm::{EndpointPool, OpenAiBackend};
-use styx_memory::{NebulaConfig, NebulaClient};
+use styx_memory::{NebulaClient, NebulaConfig};
 
 use crate::config::Config;
 
@@ -260,7 +260,13 @@ fn probe_memory(cfg: &Config) -> ProbeLine {
             let _ = client.close();
             let ms = started.elapsed().as_millis();
             if ping {
-                ProbeLine::ok("memory", "nebula", &nc.addr, "握手成功，ping 正常".into(), ms)
+                ProbeLine::ok(
+                    "memory",
+                    "nebula",
+                    &nc.addr,
+                    "握手成功，ping 正常".into(),
+                    ms,
+                )
             } else {
                 ProbeLine::fail(
                     "memory",
@@ -340,7 +346,13 @@ fn probe_pool(cfg: &Config) -> ProbeLine {
     let pool = styx_pool::MemoryPool::new(pc);
     let ms = started.elapsed().as_millis();
     if pool.ping() {
-        ProbeLine::ok("pool", "memorypool", &cfg.pool.base_url, "GET /health 正常".into(), ms)
+        ProbeLine::ok(
+            "pool",
+            "memorypool",
+            &cfg.pool.base_url,
+            "GET /health 正常".into(),
+            ms,
+        )
     } else {
         ProbeLine::fail(
             "pool",
@@ -375,9 +387,9 @@ fn tcp_reachable(host: &str) -> bool {
         Err(_) => host
             .to_socket_addrs()
             .map(|addrs| {
-                addrs.into_iter().any(|s| {
-                    std::net::TcpStream::connect_timeout(&s, deadline).is_ok()
-                })
+                addrs
+                    .into_iter()
+                    .any(|s| std::net::TcpStream::connect_timeout(&s, deadline).is_ok())
             })
             .unwrap_or(false),
     }

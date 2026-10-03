@@ -126,15 +126,14 @@ impl ChatBackend for MockBackend {
         let excerpt = summarize(&last_user, 24);
         let text = template.replace("{{echo}}", &excerpt);
 
-        let model = opts
-            .model
-            .clone()
-            .unwrap_or_else(|| endpoint.model.clone());
+        let model = opts.model.clone().unwrap_or_else(|| endpoint.model.clone());
 
         let mut completion = Completion::new(text, model, endpoint.name.clone());
         // 给一个粗糙但稳定的 token 估算，让回合报告不至于全是 0
-        completion.prompt_tokens = messages.iter().map(|m| m.content.chars().count()).sum::<usize>()
-            as u64
+        completion.prompt_tokens = messages
+            .iter()
+            .map(|m| m.content.chars().count())
+            .sum::<usize>() as u64
             / 2;
         completion.completion_tokens = 40;
         Ok(completion)
@@ -236,7 +235,9 @@ mod tests {
     #[test]
     fn produces_parseable_roleplay_output() {
         let b = MockBackend::new();
-        let c = b.chat(&ep(), &msgs("我想看看那本旧相册"), &LlmOptions::default()).unwrap();
+        let c = b
+            .chat(&ep(), &msgs("我想看看那本旧相册"), &LlmOptions::default())
+            .unwrap();
         assert!(!c.text.is_empty());
         // 输出必须能被内核的解析器读懂
         let reply = styx_core::Reply::parse(&c.text).unwrap();
@@ -247,10 +248,16 @@ mod tests {
     #[test]
     fn first_script_entry_records_a_memory() {
         let b = MockBackend::new();
-        let c = b.chat(&ep(), &msgs("相册"), &LlmOptions::default()).unwrap();
+        let c = b
+            .chat(&ep(), &msgs("相册"), &LlmOptions::default())
+            .unwrap();
         let reply = styx_core::Reply::parse(&c.text).unwrap();
         assert_eq!(reply.memories.len(), 1);
-        assert!(reply.memories[0].text.contains("相册"), "{:?}", reply.memories);
+        assert!(
+            reply.memories[0].text.contains("相册"),
+            "{:?}",
+            reply.memories
+        );
     }
 
     #[test]

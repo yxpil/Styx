@@ -48,7 +48,12 @@ impl Session {
     }
 
     /// 追加一条事件（自动分配序号与时间戳）。
-    pub fn push(&mut self, kind: EventKind, actor: impl Into<String>, text: impl Into<String>) -> u64 {
+    pub fn push(
+        &mut self,
+        kind: EventKind,
+        actor: impl Into<String>,
+        text: impl Into<String>,
+    ) -> u64 {
         let mut e = Event::new(kind, actor, text);
         self.seq += 1;
         e.seq = self.seq;
@@ -155,7 +160,10 @@ impl Session {
 
     /// 内存占用粗估（字符数），用于观测。
     pub fn approx_chars(&self) -> usize {
-        self.transcript.iter().map(|e| e.text.chars().count() + 32).sum()
+        self.transcript
+            .iter()
+            .map(|e| e.text.chars().count() + 32)
+            .sum()
     }
 }
 
@@ -341,10 +349,18 @@ mod tests {
     fn history_trims_from_oldest() {
         let mut s = Session::new(card(), Scene::new("书店"));
         for i in 0..40 {
-            s.push(EventKind::UserInput, "陈默", format!("第{i}句话，内容还挺长的用来把预算撑满"));
+            s.push(
+                EventKind::UserInput,
+                "陈默",
+                format!("第{i}句话，内容还挺长的用来把预算撑满"),
+            );
         }
         let h = s.render_history(40, 60);
-        assert!(estimate_tokens(&h) <= 60, "got {} tokens", estimate_tokens(&h));
+        assert!(
+            estimate_tokens(&h) <= 60,
+            "got {} tokens",
+            estimate_tokens(&h)
+        );
         assert!(h.contains("第39句话"));
         assert!(!h.contains("第0句话"));
     }
@@ -368,7 +384,10 @@ mod tests {
         assert_eq!(changed.len(), 2);
         assert_eq!(s.scene.time, "深夜");
         assert_eq!(s.scene.present, vec!["林夏", "陈默"]);
-        assert!(s.transcript.iter().any(|e| e.kind == EventKind::SceneChange));
+        assert!(s
+            .transcript
+            .iter()
+            .any(|e| e.kind == EventKind::SceneChange));
         // 重复设置同样的值不应再产生事件
         let before = s.transcript.len();
         s.apply_scene(&set);

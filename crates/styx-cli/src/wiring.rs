@@ -152,7 +152,10 @@ impl Wiring {
 
 // ---------------------------------------------------------------- 语言模型
 
-fn build_llm(section: &crate::config::LlmSection, notes: &mut Vec<String>) -> Result<Arc<dyn LlmPort>, String> {
+fn build_llm(
+    section: &crate::config::LlmSection,
+    notes: &mut Vec<String>,
+) -> Result<Arc<dyn LlmPort>, String> {
     let mode = section.backend.trim().to_ascii_lowercase();
     match mode.as_str() {
         "mock" | "offline" => {
@@ -162,11 +165,9 @@ fn build_llm(section: &crate::config::LlmSection, notes: &mut Vec<String>) -> Re
         "openai" | "compatible" => {
             let eps = section.resolved_endpoints();
             if eps.is_empty() {
-                return Err(
-                    "llm.backend = \"openai\"，但没有任何可用端点：\
+                return Err("llm.backend = \"openai\"，但没有任何可用端点：\
                      请在 styx.toml 里写 [[llm.endpoints]]，或设置 STYX_LLM_PRIMARY_BASE_URL"
-                        .into(),
-                );
+                    .into());
             }
             let pool = make_pool(eps, notes)?;
             Ok(pool)
@@ -223,7 +224,9 @@ fn detect_local_endpoint() -> Option<styx_llm::Endpoint> {
         if TcpStream::connect_timeout(&sock, Duration::from_millis(300)).is_err() {
             continue;
         }
-        let model = model_override.clone().unwrap_or_else(|| default_model.to_string());
+        let model = model_override
+            .clone()
+            .unwrap_or_else(|| default_model.to_string());
         return Some(match name {
             "ollama" => styx_llm::Endpoint::ollama(model),
             _ => styx_llm::Endpoint::lmstudio(model),
@@ -254,15 +257,16 @@ fn build_memory(
     .with_env();
 
     if nc.password.is_empty() {
-        notes.push(
-            "长期记忆：未提供 Nebula 密码（可用 NEBULA_PASSWORD），使用内存实现".into(),
-        );
+        notes.push("长期记忆：未提供 Nebula 密码（可用 NEBULA_PASSWORD），使用内存实现".into());
         return Arc::new(InMemoryMemory::new());
     }
 
     match NebulaMemory::connect(nc) {
         Ok(m) => {
-            notes.push(format!("长期记忆：Nebula @ {}（命名空间 {namespace}）", section.addr));
+            notes.push(format!(
+                "长期记忆：Nebula @ {}（命名空间 {namespace}）",
+                section.addr
+            ));
             Arc::new(m)
         }
         Err(e) => {
@@ -474,7 +478,9 @@ mod tests {
         use styx_core::{CharacterCard, Scene};
         let w = Wiring::offline(&seed());
         let card = CharacterCard::parse_markdown(crate::assets::DEFAULT_CARD_MD).unwrap();
-        let mut kernel = w.kernel(&Config::default(), card, Scene::new("书店")).unwrap();
+        let mut kernel = w
+            .kernel(&Config::default(), card, Scene::new("书店"))
+            .unwrap();
         let out = kernel.turn("我想看看那本相册。").unwrap();
         assert!(!out.reply.speech.is_empty());
         assert_eq!(out.turn, 1);

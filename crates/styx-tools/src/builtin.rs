@@ -133,14 +133,13 @@ pub struct DiceTool;
 
 impl Tool for DiceTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec::new("dice", "掷骰子：指定面数与个数，返回每颗点数与总和")
-            .with_schema(json!({
-                "type": "object",
-                "properties": {
-                    "sides": {"type": "integer", "minimum": 2, "default": 6},
-                    "count": {"type": "integer", "minimum": 1, "maximum": 100, "default": 1}
-                }
-            }))
+        ToolSpec::new("dice", "掷骰子：指定面数与个数，返回每颗点数与总和").with_schema(json!({
+            "type": "object",
+            "properties": {
+                "sides": {"type": "integer", "minimum": 2, "default": 6},
+                "count": {"type": "integer", "minimum": 1, "maximum": 100, "default": 1}
+            }
+        }))
     }
 
     fn invoke(&self, args: Value) -> Result<Value> {
@@ -173,25 +172,24 @@ pub struct PickTool;
 
 impl Tool for PickTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec::new("pick", "从候选列表里随机挑一个（可带权重）")
-            .with_schema(json!({
-                "type": "object",
-                "required": ["options"],
-                "properties": {
-                    "options": {
-                        "type": "array",
-                        "items": {
-                            "oneOf": [
-                                {"type": "string"},
-                                {"type": "object", "properties": {
-                                    "value": {"type": "string"},
-                                    "weight": {"type": "number"}
-                                }}
-                            ]
-                        }
+        ToolSpec::new("pick", "从候选列表里随机挑一个（可带权重）").with_schema(json!({
+            "type": "object",
+            "required": ["options"],
+            "properties": {
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "object", "properties": {
+                                "value": {"type": "string"},
+                                "weight": {"type": "number"}
+                            }}
+                        ]
                     }
                 }
-            }))
+            }
+        }))
     }
 
     fn invoke(&self, args: Value) -> Result<Value> {
@@ -436,10 +434,7 @@ mod tests {
     #[test]
     fn clock_formats_epoch_and_now() {
         assert_eq!(format_utc(0), "1970-01-01 00:00:00 UTC");
-        assert_eq!(
-            format_utc(1_767_225_600_000),
-            "2026-01-01 00:00:00 UTC"
-        );
+        assert_eq!(format_utc(1_767_225_600_000), "2026-01-01 00:00:00 UTC");
         let v = ClockTool.invoke(json!({})).unwrap();
         assert!(v["unix_ms"].as_i64().unwrap() > 1_700_000_000_000);
         assert!(v["utc"].as_str().unwrap().ends_with("UTC"));
@@ -510,15 +505,12 @@ mod tests {
             Ok("1".into())
         }
         fn recall(&self, q: &str, limit: usize) -> Result<Vec<Recalled>> {
-            Ok(vec![Recalled::new(
-                "1",
-                format!("关于 {q} 的记忆"),
-                0.9,
-                "fake",
-            )]
-            .into_iter()
-            .take(limit)
-            .collect())
+            Ok(
+                vec![Recalled::new("1", format!("关于 {q} 的记忆"), 0.9, "fake")]
+                    .into_iter()
+                    .take(limit)
+                    .collect(),
+            )
         }
         fn related(&self, _id: &str, _l: usize) -> Result<Vec<Recalled>> {
             Ok(Vec::new())
@@ -533,7 +525,11 @@ mod tests {
         fn name(&self) -> &str {
             "fake"
         }
-        fn associate(&self, seed: &str, _limit: usize) -> Result<Vec<styx_core::ports::Association>> {
+        fn associate(
+            &self,
+            seed: &str,
+            _limit: usize,
+        ) -> Result<Vec<styx_core::ports::Association>> {
             Ok(vec![styx_core::ports::Association::new(
                 format!("{seed}的邻居"),
                 0.7,
@@ -564,7 +560,10 @@ mod tests {
         let t = RecallTool::new(Arc::new(FakeMemory));
         let v = t.invoke(json!({"query":"旧照片","limit":3})).unwrap();
         assert_eq!(v["count"], 1);
-        assert!(v["memories"][0]["text"].as_str().unwrap().contains("旧照片"));
+        assert!(v["memories"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("旧照片"));
         assert!(t.invoke(json!({})).is_err());
     }
 

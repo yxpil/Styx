@@ -103,7 +103,8 @@ impl DynamicState {
     pub fn from_card(card: &crate::character::CharacterCard) -> Self {
         let mut st = DynamicState::default();
         for r in &card.relations {
-            st.affinity.insert(r.target.clone(), r.affinity.clamp(-1.0, 1.0));
+            st.affinity
+                .insert(r.target.clone(), r.affinity.clamp(-1.0, 1.0));
             // 好感为正 → 初始信任偏高；为负 → 偏低
             let base = 0.5 + r.affinity * 0.4;
             st.trust.insert(r.target.clone(), base.clamp(0.0, 1.0));
@@ -198,7 +199,10 @@ impl DynamicState {
             "心情：{}（效价{:+.2} 唤醒{:.2}）",
             self.mood.label, self.mood.valence, self.mood.arousal
         )];
-        parts.push(format!("精力：{:.2}  紧张：{:.2}", self.energy, self.tension));
+        parts.push(format!(
+            "精力：{:.2}  紧张：{:.2}",
+            self.energy, self.tension
+        ));
         if !self.affinity.is_empty() {
             let rel: Vec<String> = self
                 .affinity
@@ -498,4 +502,5 @@ mod tests {
         assert!(r.contains("心情："));
         assert!(r.contains("陈默(好感-0.30/信任0.50)"));
         assert!(r.contains("守住店"));
-    }}
+    }
+}

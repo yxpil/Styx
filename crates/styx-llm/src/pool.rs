@@ -108,7 +108,10 @@ impl EndpointPool {
 
     /// 最近一次调用耗时。
     pub fn last_latency_ms(&self) -> u64 {
-        *self.last_latency_ms.lock().unwrap_or_else(|e| e.into_inner())
+        *self
+            .last_latency_ms
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 至少有一个健康端点（不触发半开）。
@@ -159,7 +162,11 @@ impl LlmPort for EndpointPool {
 }
 
 impl EndpointPool {
-    fn complete_inner(&self, messages: &[ChatMessage], opts: &LlmOptions) -> crate::error::Result<Completion> {
+    fn complete_inner(
+        &self,
+        messages: &[ChatMessage],
+        opts: &LlmOptions,
+    ) -> crate::error::Result<Completion> {
         if messages.is_empty() {
             return Err(LlmError::Config("消息列表为空".into()));
         }
@@ -215,7 +222,12 @@ impl EndpointPool {
 
             // 端点没配模型时用端点默认值
             let mut eff = opts.clone();
-            if eff.model.as_deref().map(|m| m.trim().is_empty()).unwrap_or(true) {
+            if eff
+                .model
+                .as_deref()
+                .map(|m| m.trim().is_empty())
+                .unwrap_or(true)
+            {
                 eff.model = Some(ep.model.clone());
             }
 
@@ -283,12 +295,7 @@ mod tests {
     impl ScriptedBackend {
         fn new(fail_plan: &[(&str, usize)]) -> Self {
             ScriptedBackend {
-                fail_plan: Mutex::new(
-                    fail_plan
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), *v))
-                        .collect(),
-                ),
+                fail_plan: Mutex::new(fail_plan.iter().map(|(k, v)| (k.to_string(), *v)).collect()),
                 calls: Mutex::new(Vec::new()),
                 fail_counts: Mutex::new(std::collections::HashMap::new()),
                 total: AtomicUsize::new(0),
@@ -337,8 +344,7 @@ mod tests {
     }
 
     fn ep(name: &str, weight: u32) -> Endpoint {
-        Endpoint::new(name, "http://127.0.0.1:1/v1", format!("{name}-model"))
-            .with_weight(weight)
+        Endpoint::new(name, "http://127.0.0.1:1/v1", format!("{name}-model")).with_weight(weight)
     }
 
     fn msgs() -> Vec<ChatMessage> {
@@ -347,7 +353,8 @@ mod tests {
 
     #[test]
     fn single_endpoint_round_trip() {
-        let pool = EndpointPool::new(vec![ep("a", 1)], Arc::new(ScriptedBackend::new(&[]))).unwrap();
+        let pool =
+            EndpointPool::new(vec![ep("a", 1)], Arc::new(ScriptedBackend::new(&[]))).unwrap();
         let c = pool.complete(&msgs(), &LlmOptions::default()).unwrap();
         assert!(c.text.contains("来自 a"));
         assert_eq!(c.endpoint, "a");
@@ -360,8 +367,7 @@ mod tests {
     #[test]
     fn fails_over_to_the_next_endpoint() {
         let backend = Arc::new(ScriptedBackend::new(&[("a", 10)]));
-        let pool =
-            EndpointPool::new(vec![ep("a", 1), ep("b", 1)], backend.clone()).unwrap();
+        let pool = EndpointPool::new(vec![ep("a", 1), ep("b", 1)], backend.clone()).unwrap();
         let c = pool.complete(&msgs(), &LlmOptions::default()).unwrap();
         assert_eq!(c.endpoint, "b", "a 一直挂，应当切换到 b");
         assert!(!backend.calls().is_empty());
@@ -370,11 +376,8 @@ mod tests {
     #[test]
     fn never_retries_the_same_endpoint_twice_in_one_call() {
         let backend = Arc::new(ScriptedBackend::new(&[("a", 10), ("b", 10), ("c", 10)]));
-        let pool = EndpointPool::new(
-            vec![ep("a", 1), ep("b", 1), ep("c", 1)],
-            backend.clone(),
-        )
-        .unwrap();
+        let pool =
+            EndpointPool::new(vec![ep("a", 1), ep("b", 1), ep("c", 1)], backend.clone()).unwrap();
         let err = pool.complete(&msgs(), &LlmOptions::default()).unwrap_err();
         assert!(err.to_string().contains("所有端点都失败了"), "got {err}");
         let calls = backend.calls();
@@ -419,7 +422,12 @@ mod tests {
         // 再跑几轮，a 恢复后会被选中
         let mut hit_a = false;
         for _ in 0..8 {
-            if pool.complete(&msgs(), &LlmOptions::default()).unwrap().endpoint == "a" {
+            if pool
+                .complete(&msgs(), &LlmOptions::default())
+                .unwrap()
+                .endpoint
+                == "a"
+            {
                 hit_a = true;
                 break;
             }
@@ -430,11 +438,7 @@ mod tests {
     #[test]
     fn weighted_distribution_is_respected() {
         let backend = Arc::new(ScriptedBackend::new(&[]));
-        let pool = EndpointPool::new(
-            vec![ep("a", 3), ep("b", 1)],
-            backend.clone(),
-        )
-        .unwrap();
+        let pool = EndpointPool::new(vec![ep("a", 3), ep("b", 1)], backend.clone()).unwrap();
         for _ in 0..40 {
             pool.complete(&msgs(), &LlmOptions::default()).unwrap();
         }
@@ -494,12 +498,9 @@ mod tests {
     #[test]
     fn max_attempts_limits_failover() {
         let backend = Arc::new(ScriptedBackend::new(&[("a", 10), ("b", 10), ("c", 10)]));
-        let pool = EndpointPool::new(
-            vec![ep("a", 1), ep("b", 1), ep("c", 1)],
-            backend.clone(),
-        )
-        .unwrap()
-        .with_max_attempts(2);
+        let pool = EndpointPool::new(vec![ep("a", 1), ep("b", 1), ep("c", 1)], backend.clone())
+            .unwrap()
+            .with_max_attempts(2);
         let err = pool.complete(&msgs(), &LlmOptions::default()).unwrap_err();
         assert!(err.to_string().contains("所有端点都失败了"));
         assert_eq!(backend.calls().len(), 2);

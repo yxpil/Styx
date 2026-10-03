@@ -57,11 +57,8 @@ impl Request {
                 return Some(v.clone());
             }
         }
-        self.json().and_then(|j| {
-            j.get(key)
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
+        self.json()
+            .and_then(|j| j.get(key).and_then(|v| v.as_str()).map(|s| s.to_string()))
     }
 
     /// 查询参数或 JSON body 里的一个数字字段。
@@ -108,7 +105,11 @@ impl Response {
     }
 
     pub fn text(status: u16, body: impl Into<String>) -> Self {
-        Response::new(status, "text/plain; charset=utf-8", body.into().into_bytes())
+        Response::new(
+            status,
+            "text/plain; charset=utf-8",
+            body.into().into_bytes(),
+        )
     }
 
     pub fn json(status: u16, value: &serde_json::Value) -> Self {
@@ -378,7 +379,8 @@ mod tests {
 
     #[test]
     fn parses_a_get_with_query() {
-        let r = req("GET /api/state?session=%E6%9E%97%E5%A4%8F&limit=3 HTTP/1.1\r\nHost: x\r\n\r\n");
+        let r =
+            req("GET /api/state?session=%E6%9E%97%E5%A4%8F&limit=3 HTTP/1.1\r\nHost: x\r\n\r\n");
         assert_eq!(r.method, "GET");
         assert_eq!(r.path, "/api/state");
         assert_eq!(r.query.get("session").unwrap(), "林夏");

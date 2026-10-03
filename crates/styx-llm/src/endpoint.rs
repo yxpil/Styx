@@ -62,7 +62,11 @@ fn default_cooldown() -> u64 {
 
 impl Endpoint {
     /// 一个最简端点。
-    pub fn new(name: impl Into<String>, base_url: impl Into<String>, model: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Endpoint {
             name: name.into(),
             base_url: base_url.into(),
@@ -198,9 +202,18 @@ mod tests {
     #[test]
     fn chat_url_derivation() {
         let cases = [
-            ("https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"),
-            ("https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"),
-            ("http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/v1/chat/completions"),
+            (
+                "https://api.openai.com/v1",
+                "https://api.openai.com/v1/chat/completions",
+            ),
+            (
+                "https://api.deepseek.com",
+                "https://api.deepseek.com/v1/chat/completions",
+            ),
+            (
+                "http://127.0.0.1:11434/v1",
+                "http://127.0.0.1:11434/v1/chat/completions",
+            ),
             (
                 "https://dashscope.aliyuncs.com/compatible-mode/v1",
                 "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
@@ -243,8 +256,12 @@ mod tests {
 
     #[test]
     fn presets_are_sane() {
-        assert!(Endpoint::ollama("qwen2.5").chat_url().contains("11434/v1/chat/completions"));
-        assert!(Endpoint::lmstudio("m").chat_url().contains("1234/v1/chat/completions"));
+        assert!(Endpoint::ollama("qwen2.5")
+            .chat_url()
+            .contains("11434/v1/chat/completions"));
+        assert!(Endpoint::lmstudio("m")
+            .chat_url()
+            .contains("1234/v1/chat/completions"));
         let o = Endpoint::openai("gpt-4o-mini", "sk-x");
         assert_eq!(o.api_key, "sk-x");
         assert!(o.validate().is_ok());
