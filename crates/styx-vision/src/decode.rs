@@ -310,7 +310,11 @@ pub(crate) fn decode_png(data: &[u8]) -> Result<Bitmap, DecodeError> {
 
         match kind {
             b"PLTE" => {
-                for chunk in body.chunks_exact(3).take(256) {
+                // PLTE 是一串 RGB 三元组，最多 256 条。`as_chunks` 把
+                // "每 3 字节一组"写进类型里，于是不必再靠 `chunks_exact`
+                // 保证长度：`.0` 是完整的 `[u8; 3]` 数组，末尾不足 3 字节的
+                // 残渣留在 `.1` 里被丢掉，与 `chunks_exact` 的语义一致。
+                for chunk in body.as_chunks::<3>().0.iter().take(256) {
                     palette.push(Rgb::new(chunk[0], chunk[1], chunk[2]));
                 }
             }
