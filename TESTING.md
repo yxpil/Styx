@@ -1,5 +1,12 @@
 # Styx 测试说明 / Testing Guide
 
+- 测试完成：是（2026-10-04）
+- 测试日期：2026-10-04
+- 测试内容：各 crate 既有 `#[cfg(test)]` 单元与既有集成测试；本次新增外部视角集成——styx-web `tests/injection_security.rs` 8（编码路径穿越 `%2e%2e%2f` 白名单拒绝、`/`与`\`段拒绝、NUL/空白拒绝、文件名上限、超大 body 读前拒绝、XSS 查询串不反射、垃圾请求行拒绝）；styx-tools `tests/registry_hooks.rs` 8（ToolRegistry/ChainedTools 注册→列出→调用、未知工具 UnknownTool、失败传播、同名覆盖、失败隔离、链式去重/第一端口胜出/失败回退）；styx-guard `tests/atomic_write_security.rs` 3（原子写往返、缺失读 None、不残留 .tmp）。
+- 运行命令：`cargo test --workspace --no-fail-fast`（单 crate：`cargo test -p styx-web` / `-p styx-tools` / `-p styx-guard`）
+- 测试框架：Rust `#[cfg(test)]` + 外部 `tests/` 集成测试
+- 模型：豆包（Doubao）生成
+
 Styx 是一个多 crate 的 Cargo workspace（`crates/` 下 13 个 crate）。各 crate 内部
 早已广泛使用 `#[cfg(test)]` 单元测试，并有若干 `tests/` 集成测试。本次补测在**不改动
 产品代码**的前提下，为安全/钩子相关的 crate 新增了从外部视角的集成测试。
