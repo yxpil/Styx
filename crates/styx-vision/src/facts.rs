@@ -573,7 +573,8 @@ pub fn analyze_bitmap(bitmap: &Bitmap) -> ImageFacts {
             (c, Rgb::new((r / c) as u8, (g / c) as u8, (b / c) as u8))
         })
         .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    // 出现次数从多到少。`Reverse` 让 `sort_by_key` 也能表达降序。
+    ranked.sort_by_key(|e| std::cmp::Reverse(e.0));
     let mut chosen: Vec<Rgb> = Vec::new();
     for (_, color) in ranked {
         // 去重：已经很接近的颜色不再重复列
@@ -668,7 +669,7 @@ fn name_of_hex(hex: &str) -> Option<String> {
         ""
     };
     let base = match hue {
-        h if h < 15.0 || h >= 345.0 => "红",
+        h if !(15.0..345.0).contains(&h) => "红",
         h if h < 45.0 => "橙",
         h if h < 70.0 => "黄",
         h if h < 95.0 => "黄绿",
@@ -680,6 +681,18 @@ fn name_of_hex(hex: &str) -> Option<String> {
         _ => "红",
     };
     Some(format!("{warm}{base}"))
+}
+
+/// 只给测试用的小断言助手。
+///
+/// 放在 `mod tests` **之前**：clippy 的 `items_after_test_module` 要求测试模块是文件里
+/// 最后一个条目，而 inherent impl 塞不进 `mod tests`（那样会变成 `tests::ImageFacts`，
+/// 与被测类型不是同一个东西）。
+#[cfg(test)]
+impl ImageFacts {
+    fn render_dominant_contains(&self, needle: &str) -> bool {
+        self.palette_label().contains(needle)
+    }
 }
 
 #[cfg(test)]
@@ -920,13 +933,5 @@ mod tests {
         for forbidden in ["里面有一只", "画的是", "内容是"] {
             assert!(!d.contains(forbidden), "不该断言画面内容：{d}");
         }
-    }
-}
-
-#[cfg(test)]
-impl ImageFacts {
-    /// 只给测试用的小断言助手。
-    fn render_dominant_contains(&self, needle: &str) -> bool {
-        self.palette_label().contains(needle)
     }
 }

@@ -766,10 +766,7 @@ fn word_eq(token: &str, kw: &str) -> bool {
 
 /// 统一大小写与分隔符：`Long Hair` / `long-hair` / `long_hair` 视为同一个词。
 fn normalize(s: &str) -> String {
-    s.trim()
-        .to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_")
+    s.trim().to_ascii_lowercase().replace(['-', ' '], "_")
 }
 
 // ------------------------------------------------------------------- 加工

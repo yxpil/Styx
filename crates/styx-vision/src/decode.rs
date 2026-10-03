@@ -399,7 +399,7 @@ fn unfilter(ft: u8, bpp: usize, cur: &mut [u8], prev: &[u8]) -> Result<(), Decod
                 let a = if i >= bpp { cur[i - bpp] as u16 } else { 0 };
                 let b = prev[i] as u16;
                 let c = if i >= bpp { prev[i - bpp] as u16 } else { 0 };
-                cur[i] = cur[i].wrapping_add(paeth(a, b, c) as u8);
+                cur[i] = cur[i].wrapping_add(paeth(a, b, c));
             }
         }
         other => return Err(DecodeError::Corrupt(format!("未知的过滤类型 {other}"))),
@@ -487,7 +487,11 @@ fn sample_index(row: &[u8], x: usize, bit_depth: u8) -> usize {
         8 => row.get(x).copied().unwrap_or(0) as usize,
         4 => {
             let b = row.get(x / 2).copied().unwrap_or(0);
-            (if x % 2 == 0 { b >> 4 } else { b & 0x0f }) as usize
+            (if x.is_multiple_of(2) {
+                b >> 4
+            } else {
+                b & 0x0f
+            }) as usize
         }
         2 => {
             let b = row.get(x / 4).copied().unwrap_or(0);

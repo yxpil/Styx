@@ -96,10 +96,7 @@ impl<'a> BitReader<'a> {
 
     fn bit(&mut self) -> Result<u8, DecodeError> {
         if self.bits == 0 {
-            let b = *self
-                .data
-                .get(self.pos)
-                .ok_or_else(|| DecodeError::Truncated)?;
+            let b = *self.data.get(self.pos).ok_or(DecodeError::Truncated)?;
             self.pos += 1;
             if b == 0xFF {
                 match self.data.get(self.pos) {
@@ -353,7 +350,7 @@ pub(crate) fn decode_jpeg(data: &[u8]) -> Result<Bitmap, DecodeError> {
             // 解析完之后给出**准确的**拒绝理由。早先这里对 0xC2 直接
             // `continue`，结果帧头字段（宽高、分量表）全空，最后报出来的是
             // "SOS 出现在帧头之前"——一个和真实原因毫无关系的信息。
-            0xC0 | 0xC1 | 0xC2 => {
+            0xC0..=0xC2 => {
                 let precision = *body.first().ok_or(DecodeError::Truncated)?;
                 if precision != 8 {
                     return Err(DecodeError::Unsupported(format!(
@@ -427,9 +424,9 @@ pub(crate) fn decode_jpeg(data: &[u8]) -> Result<Bitmap, DecodeError> {
                     }
                     let mut counts = [0u32; 17];
                     let mut total = 0usize;
-                    for len in 1..=16usize {
+                    for slot in counts.iter_mut().take(17).skip(1) {
                         let c = body.get(i).copied().ok_or(DecodeError::Truncated)? as u32;
-                        counts[len] = c;
+                        *slot = c;
                         total += c as usize;
                         i += 1;
                     }
@@ -526,8 +523,8 @@ fn decode_scan(
 
     // 每个分量需要的块数要向上取整到 MCU 边界。少算一格的表现是
     // "右下角少一块"，多算一格则是越界 panic——两者都很容易被忽略。
-    let mcu_w = (width + 8 * h_max - 1) / (8 * h_max);
-    let mcu_h = (height + 8 * v_max - 1) / (8 * v_max);
+    let mcu_w = width.div_ceil(8 * h_max);
+    let mcu_h = height.div_ceil(8 * v_max);
     for c in components.iter_mut() {
         c.blocks_w = mcu_w * c.h;
         c.blocks_h = mcu_h * c.v;
@@ -544,20 +541,19 @@ fn decode_scan(
         let mcu_x = mcu % mcu_w;
         let mcu_y = mcu / mcu_w;
 
-        for ci in 0..components.len() {
-            let h = components[ci].h;
-            let v = components[ci].v;
+        for comp in components.iter_mut() {
+            let h = comp.h;
+            let v = comp.v;
             for by in 0..v {
                 for bx in 0..h {
                     let gx = mcu_x * h + bx;
                     let gy = mcu_y * v + by;
-                    let c = &mut components[ci];
-                    if gx >= c.blocks_w || gy >= c.blocks_h {
+                    if gx >= comp.blocks_w || gy >= comp.blocks_h {
                         continue;
                     }
-                    let tq = c.tq;
-                    let dc_table = c.dc_table;
-                    let ac_table = c.ac_table;
+                    let tq = comp.tq;
+                    let dc_table = comp.dc_table;
+                    let ac_table = comp.ac_table;
                     let table_dc = dc_tables
                         .get(dc_table)
                         .and_then(|t| t.as_ref())
@@ -572,9 +568,8 @@ fn decode_scan(
                     // DC 是**差分**编码：解出来的是与上一块 DC 的差值。
                     let t = table_dc.decode(&mut reader)?;
                     let diff = reader.receive_extend(t as u32)?;
-                    let c = &mut components[ci];
-                    c.dc_pred += diff;
-                    let pred = c.dc_pred;
+                    comp.dc_pred += diff;
+                    let pred = comp.dc_pred;
                     block[0] = pred * quant[tq][0] as i32;
 
                     // ---- AC ----
@@ -599,8 +594,7 @@ fn decode_scan(
                         k += 1;
                     }
 
-                    let c = &mut components[ci];
-                    *c.block_mut(gx, gy) = block;
+                    *comp.block_mut(gx, gy) = block;
                 }
             }
         }
@@ -637,7 +631,7 @@ fn decode_scan(
 /// 因为色度降采样（4:2:0 / 4:2:2）是**手机上最普遍的编码方式**。用最近邻
 /// 把色度放大 2 倍，会得到肉眼可见的彩色块状边缘；而 libjpeg 默认用的是
 /// 三角滤波（`do_fancy_upsampling = TRUE`），也就是"每个输出像素取 3/4 近邻
-/// + 1/4 次近邻"。实测差距不小：同一张 4:2:0 的图，最近邻与 libjpeg 的
+/// 加上 1/4 次近邻"。实测差距不小：同一张 4:2:0 的图，最近邻与 libjpeg 的
 /// 逐像素平均差是 **3.47**，而换成三角滤波之后会掉到 1 以下。
 ///
 /// 所以下面两个函数的系数、取整偏移（`+1` / `+2` / `+7` / `+8`）和边界处理
@@ -765,8 +759,8 @@ fn assemble(components: &[Component], width: usize, height: usize) -> Result<Bit
 
     let h_max = components.iter().map(|c| c.h).max().unwrap_or(1);
     let v_max = components.iter().map(|c| c.v).max().unwrap_or(1);
-    let mcu_w = (width + 8 * h_max - 1) / (8 * h_max);
-    let mcu_h = (height + 8 * v_max - 1) / (8 * v_max);
+    let mcu_w = width.div_ceil(8 * h_max);
+    let mcu_h = height.div_ceil(8 * v_max);
 
     // 先把每个分量 IDCT 成"自己的分辨率"的平面，再各自升采样到完整分辨率。
     let mut planes: Vec<Vec<u8>> = Vec::new();

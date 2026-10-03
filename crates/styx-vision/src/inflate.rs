@@ -132,9 +132,9 @@ impl Huffman {
 
         // Kraft 不等式：码长自洽才能建表。over-subscribed 直接拒。
         let mut left: i32 = 1;
-        for len in 1..=15 {
+        for c in &count[1..] {
             left <<= 1;
-            left -= count[len] as i32;
+            left -= *c as i32;
             if left < 0 {
                 return Err(InflateError::BadHuffmanTable);
             }
@@ -358,15 +358,12 @@ fn dynamic_tables(r: &mut BitReader<'_>) -> Result<(Huffman, Huffman), InflateEr
             }
             17 => {
                 let repeat = 3 + r.bits(3)? as usize;
-                for _ in 0..repeat {
-                    lens.push(0);
-                }
+                // 补 `repeat` 个 0 码长；用 resize 比逐个 push 更直白（也不会漏掉容量预留）
+                lens.resize(lens.len() + repeat, 0);
             }
             18 => {
                 let repeat = 11 + r.bits(7)? as usize;
-                for _ in 0..repeat {
-                    lens.push(0);
-                }
+                lens.resize(lens.len() + repeat, 0);
             }
             _ => return Err(InflateError::BadCode),
         }
@@ -500,5 +497,81 @@ mod tests {
             0xff, 0x01, 0xe4, 0xc9, 0xfe, 0x10,
         ];
         assert_eq!(inflate_zlib(&compressed).unwrap(), payload);
+    }
+
+    /// 压缩炸弹：不到 33 KB 的流，能解出 5 MB 以上。
+    ///
+    /// `inflate` **没有输出上限**：`inflate_block` 里的 `out.push` 只受输入里
+    /// 回引数量的约束，而 DEFLATE 用 (长度 258, 距离 1) 可以拿 13 bit 换 258 字节
+    /// （≈158:1，再加字面量还能更高）。这条测试把"无上限"钉死——一旦有人加了
+    /// 上限它会失败，提醒他去看 `decode_png` 里 `inflate_zlib` 与 `expected`
+    /// 校验的**先后顺序**：解压发生在校验之前，`MAX_DIM` 拦不住压缩炸弹。
+    #[test]
+    fn a_tiny_stream_expands_far_beyond_any_sane_image() {
+        /// DEFLATE 位流：Huffman 码高位先出，字节内低位先填。
+        struct Bits {
+            out: Vec<u8>,
+            acc: u32,
+            n: u32,
+        }
+        impl Bits {
+            fn bit(&mut self, b: u32) {
+                self.acc |= (b & 1) << self.n;
+                self.n += 1;
+                if self.n == 8 {
+                    self.out.push(self.acc as u8);
+                    self.acc = 0;
+                    self.n = 0;
+                }
+            }
+            /// 数值字段（BFINAL / BTYPE）：低位先传。
+            fn lsb(&mut self, v: u32, len: u32) {
+                for i in 0..len {
+                    self.bit((v >> i) & 1);
+                }
+            }
+            /// Huffman 码：高位先传。
+            fn msb(&mut self, v: u32, len: u32) {
+                for i in (0..len).rev() {
+                    self.bit((v >> i) & 1);
+                }
+            }
+            fn finish(mut self) -> Vec<u8> {
+                if self.n > 0 {
+                    self.out.push(self.acc as u8);
+                }
+                self.out
+            }
+        }
+
+        let repeats: u32 = 20_480; // 1 + 20480 × 258 = 5_283_841 字节
+        let mut w = Bits {
+            out: Vec::new(),
+            acc: 0,
+            n: 0,
+        };
+        w.lsb(1, 1); // BFINAL = 1
+        w.lsb(1, 2); // BTYPE = 01（固定 Huffman）
+        w.msb(0x30, 8); // 字面量 0：先垫一个字节，给回引一个可指的窗口
+        for _ in 0..repeats {
+            w.msb(0xC5, 8); // 长度码 285 → 258 字节
+            w.msb(0x00, 5); // 距离码 0 → 距离 1
+        }
+        w.msb(0x00, 7); // 符号 256：块结束
+        let bomb = w.finish();
+
+        let expanded = inflate(&bomb).unwrap();
+        assert_eq!(expanded.len(), 1 + repeats as usize * 258);
+        assert!(
+            expanded.len() > 5 * 1024 * 1024,
+            "解出了 {} 字节",
+            expanded.len()
+        );
+        assert!(
+            bomb.len() < 40 * 1024,
+            "输入只有 {} 字节，放大 {} 倍",
+            bomb.len(),
+            expanded.len() / bomb.len()
+        );
     }
 }

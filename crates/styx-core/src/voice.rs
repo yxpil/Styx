@@ -143,7 +143,7 @@ pub trait SpeechSynthesizer: Send + Sync {
 
     /// 人类可读状态行。
     fn status(&self) -> String {
-        format!("{}", self.name())
+        self.name().to_string()
     }
 }
 
@@ -161,7 +161,7 @@ pub trait Transcriber: Send + Sync {
     fn transcribe(&self, audio: &[u8], hint: Option<&str>) -> Result<Transcript>;
 
     fn status(&self) -> String {
-        format!("{}", self.name())
+        self.name().to_string()
     }
 }
 
