@@ -75,7 +75,11 @@ fn banner(kernel: &Kernel, cfg: &Config, _debug: bool, interactive: bool) {
         return;
     }
     println!("┌─ Styx · 角色扮演内核 ─────────────────────────────");
-    println!("│ 角色：{}（{}）", kernel.card().name, short(&kernel.card().persona, 28));
+    println!(
+        "│ 角色：{}（{}）",
+        kernel.card().name,
+        short(&kernel.card().persona, 28)
+    );
     println!("│ 场景：{}", short(&kernel.scene().render(), 36));
     println!("│ 你  ：{}", cfg.character.user_name);
     println!("│ 输入 /help 看命令，/quit 退出");
@@ -177,7 +181,10 @@ impl Repl<'_> {
             }
             "/save" => self.save(&rest)?,
             "/load" => self.load(&rest)?,
-            "/probe" => println!("{}", crate::probe::render(&crate::probe::run(self.cfg, false))),
+            "/probe" => println!(
+                "{}",
+                crate::probe::render(&crate::probe::run(self.cfg, false))
+            ),
             other => return Err(format!("未知命令 {other}（输入 /help 看全部）")),
         }
         Ok(())
@@ -256,7 +263,10 @@ impl Repl<'_> {
             serde_json::from_str(args).map_err(|e| format!("入参不是合法 JSON：{e}"))?
         };
         match port.invoke(name, args) {
-            Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())),
+            Ok(v) => println!(
+                "{}",
+                serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string())
+            ),
             Err(e) => println!("！ 调用失败：{e}"),
         }
         Ok(())
@@ -310,7 +320,10 @@ impl Repl<'_> {
         if rest.is_empty() {
             return Err("用法：/remember <文本>".into());
         }
-        let tags = vec!["手动".to_string(), self.kernel.card().namespace().to_string()];
+        let tags = vec![
+            "手动".to_string(),
+            self.kernel.card().namespace().to_string(),
+        ];
         match self.kernel.remember(rest, &tags, 0.8) {
             Ok(id) => println!("（记住了，id={id}）"),
             Err(e) => println!("！ 写入失败：{e}"),
@@ -335,7 +348,10 @@ impl Repl<'_> {
         } else {
             rest.to_string()
         };
-        std::fs::write(&path, self.kernel.session().snapshot_json())
+        // 原子写：存档时被 Ctrl+C、断电、强杀，目标文件要么是上一份完整
+        // 快照，要么是这一份——不会留下一个解析不了半截文件，
+        // 把之前的进度也一起带走。
+        styx_guard::fsutil::atomic_write(&path, self.kernel.session().snapshot_json().as_bytes())
             .map_err(|e| format!("写入 {path} 失败：{e}"))?;
         println!("（已保存到 {path}）");
         Ok(())

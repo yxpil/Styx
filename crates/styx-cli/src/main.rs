@@ -49,6 +49,14 @@ struct Cli {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// 日志级别：error / warn / info / debug / trace（覆盖配置）
+    #[arg(long, global = true, value_name = "LEVEL", env = "STYX_LOG_LEVEL")]
+    log_level: Option<String>,
+
+    /// 日志输出为 JSON Lines（给采集器消费）
+    #[arg(long, global = true)]
+    log_json: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -122,6 +130,12 @@ struct WebArgs {
     /// 打印每个请求（排查前端问题、观察回合耗时）
     #[arg(long)]
     request_log: bool,
+    /// 访问令牌（对外提供访问时必设）
+    #[arg(long, value_name = "TOKEN", env = "STYX_TOKEN")]
+    token: Option<String>,
+    /// 生成一个随机令牌并打印，然后退出
+    #[arg(long)]
+    generate_token: bool,
 }
 
 #[derive(Debug, Args)]
@@ -187,8 +201,29 @@ fn main() {
     }
 }
 
+/// 装日志器：命令行 > 配置 > 默认。
+///
+/// 放在最前面，因为后面每一步（装配、连后端、起服务）都可能想说话，
+/// 而"话该往哪说"必须在第一句之前定好。
+fn init_observability(cfg: &Config, cli: &Cli) -> Result<(), String> {
+    let level = match cli.log_level.as_deref() {
+        Some(s) => styx_observ::Level::parse(s).ok_or_else(|| {
+            format!("未知的 --log-level：{s}（可选 error/warn/info/debug/trace）")
+        })?,
+        None => cfg.observability.level()?,
+    };
+    let format = if cli.log_json {
+        styx_observ::Format::Json
+    } else {
+        cfg.observability.format()?
+    };
+    styx_observ::init(level, format);
+    Ok(())
+}
+
 fn run(cli: Cli) -> Result<(), String> {
     let (cfg, path) = Config::load(cli.config.as_deref())?;
+    init_observability(&cfg, &cli)?;
     if cli.verbose {
         match &path {
             Some(p) => eprintln!("· 配置：{}", p.display()),
@@ -211,14 +246,16 @@ fn run(cli: Cli) -> Result<(), String> {
 // -------------------------------------------------------------------- init
 
 fn cmd_init(args: &InitArgs, verbose: bool) -> Result<(), String> {
-    std::fs::create_dir_all(&args.dir).map_err(|e| format!("创建 {} 失败：{e}", args.dir.display()))?;
+    std::fs::create_dir_all(&args.dir)
+        .map_err(|e| format!("创建 {} 失败：{e}", args.dir.display()))?;
 
     let cfg_path = args.dir.join(config::FILE_NAME);
     let card_dir = args.dir.join("examples").join("cards");
     let card_path = card_dir.join("linxia.md");
 
     write_new(&cfg_path, assets::CONFIG_TEMPLATE, args.force)?;
-    std::fs::create_dir_all(&card_dir).map_err(|e| format!("创建 {} 失败：{e}", card_dir.display()))?;
+    std::fs::create_dir_all(&card_dir)
+        .map_err(|e| format!("创建 {} 失败：{e}", card_dir.display()))?;
     write_new(&card_path, assets::DEFAULT_CARD_MD, args.force)?;
 
     if verbose {
@@ -235,10 +272,7 @@ fn cmd_init(args: &InitArgs, verbose: bool) -> Result<(), String> {
 
 fn write_new(path: &std::path::Path, body: &str, force: bool) -> Result<(), String> {
     if path.exists() && !force {
-        return Err(format!(
-            "{} 已存在（加 --force 覆盖）",
-            path.display()
-        ));
+        return Err(format!("{} 已存在（加 --force 覆盖）", path.display()));
     }
     std::fs::write(path, body).map_err(|e| format!("写入 {} 失败：{e}", path.display()))
 }
@@ -479,8 +513,7 @@ struct Factory {
 
 impl styx_server::KernelFactory for Factory {
     fn create(&self, session_id: &str) -> styx_core::Result<Kernel> {
-        let card = resolve_card(&self.cfg, self.card_path.as_deref())
-            .map_err(StyxError::Other)?;
+        let card = resolve_card(&self.cfg, self.card_path.as_deref()).map_err(StyxError::Other)?;
         let namespace = format!("{}-{}", card.namespace(), sanitize(session_id));
         let wiring = Wiring::build(&self.cfg, &namespace, &seed_from_card(&card))
             .map_err(StyxError::Other)?;
@@ -524,18 +557,32 @@ fn cmd_serve(cfg: &Config, args: &ServeArgs, verbose: bool) -> Result<(), String
         card_path: args.card.clone(),
         stickers: None,
     };
-    let server = Arc::new(styx_server::Server::new(Arc::new(factory)).with_default_session(&args.session));
-    eprintln!("提示：客户端用一行一个 JSON 对话，例如 echo '{{\"op\":\"ping\"}}' | nc 127.0.0.1 7879");
+    let limits = cfg.limits.resolve()?;
+    let server = Arc::new(
+        styx_server::Server::new(Arc::new(factory))
+            .with_default_session(&args.session)
+            .with_limits(limits),
+    );
+    // 把 Ctrl+C 从"当场倒地"改成"优雅收尾"：正在跑的回合会跑完。
+    if let Err(e) = server.shutdown_handle().install_ctrlc() {
+        eprintln!("· {e}（关闭时会直接退出）");
+    }
+    eprintln!(
+        "提示：客户端用一行一个 JSON 对话，例如 echo '{{\"op\":\"ping\"}}' | nc 127.0.0.1 7879"
+    );
     server.bind_and_run(&args.addr).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------- web
 
 fn cmd_web(cfg: &Config, args: &WebArgs, verbose: bool) -> Result<(), String> {
-    let addr = args
-        .addr
-        .clone()
-        .unwrap_or_else(|| cfg.web.addr.clone());
+    if args.generate_token {
+        // 唯一一处需要把令牌原文打出来的地方。
+        println!("{}", styx_guard::Token::generate().reveal());
+        return Ok(());
+    }
+
+    let addr = args.addr.clone().unwrap_or_else(|| cfg.web.addr.clone());
     let session = args
         .session
         .clone()
@@ -572,14 +619,42 @@ fn cmd_web(cfg: &Config, args: &WebArgs, verbose: bool) -> Result<(), String> {
         card_path: args.card.clone(),
         stickers: Some(Arc::clone(&catalog)),
     };
+    let limits = cfg.limits.resolve()?;
+    let alerter = Arc::new(build_alerter(cfg, &limits));
     let server = Arc::new(
-        styx_server::Server::new(Arc::new(factory)).with_default_session(&session),
-    );
-    let web = Arc::new(
-        styx_web::WebServer::new(server, catalog, dir)
+        styx_server::Server::new(Arc::new(factory))
             .with_default_session(&session)
-            .with_verbose(args.request_log || verbose),
+            .with_limits(limits),
     );
+    // 装在这里而不是 WebServer 里：门和关闭信号都挂在 Server 上，
+    // `styx serve` 与 `styx web` 因此共享同一个关闭动作。
+    if let Err(e) = server.shutdown_handle().install_ctrlc() {
+        eprintln!("· {e}（关闭时会直接退出）");
+    }
+    // 命令行 > 配置。
+    let token = match args.token.as_deref() {
+        Some(t) => styx_guard::Token::new(t),
+        None => cfg.auth.resolved(),
+    };
+    if let Some(t) = &token {
+        if t.is_weak() {
+            eprintln!(
+                "· 警告：访问令牌只有 {} 个字符，太短了。用 `styx web --generate-token` 换一个。",
+                t.secret_len()
+            );
+        }
+    }
+
+    let mut web = styx_web::WebServer::new(server, catalog, dir)
+        .with_default_session(&session)
+        .with_verbose(args.request_log || verbose);
+    if !alerter.is_empty() {
+        web = web.with_alerts(Arc::clone(&alerter));
+    }
+    if let Some(t) = token {
+        web = web.with_token(t);
+    }
+    let web = Arc::new(web);
 
     if args.open || cfg.web.open {
         // 等监听真正起来再开浏览器，否则会开出"无法访问"
@@ -592,6 +667,20 @@ fn cmd_web(cfg: &Config, args: &WebArgs, verbose: bool) -> Result<(), String> {
 
     web.bind_and_run(&addr)
         .map_err(|e| format!("无法监听 {addr}：{e}"))
+}
+
+/// 组装告警引擎：规则来自配置，投递端是结构化日志。
+///
+/// 先只接日志这一个投递端是刻意的——绝大多数部署都有日志采集，
+/// 一条 `level=error target=alert` 的记录天然能被现有通道捞走；
+/// 等真的需要推到别处，再加 `AlertSink` 的实现即可。
+fn build_alerter(cfg: &Config, limits: &styx_guard::Limits) -> styx_observ::Alerter {
+    let mut a =
+        styx_observ::Alerter::with_rules(cfg.observability.alert_rules(limits.max_connections));
+    if !a.is_empty() {
+        a.add_sink(Box::new(styx_observ::LogSink));
+    }
+    a
 }
 
 /// 监听地址 → 浏览器能访问的地址（`0.0.0.0` 换成回环）。
@@ -638,7 +727,12 @@ fn resolve_card(cfg: &Config, explicit: Option<&std::path::Path>) -> Result<Char
 /// 从角色卡里取几段文本，作为内存共现图的初始语料。
 fn seed_from_card(card: &CharacterCard) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for s in [&card.background, &card.persona, &card.archetype, &card.speech_style] {
+    for s in [
+        &card.background,
+        &card.persona,
+        &card.archetype,
+        &card.speech_style,
+    ] {
         if !s.trim().is_empty() {
             out.push(s.clone());
         }
@@ -656,7 +750,13 @@ fn seed_from_card(card: &CharacterCard) -> Vec<String> {
 fn sanitize(s: &str) -> String {
     let cleaned: String = s
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let cleaned = cleaned.trim_matches('_').to_string();
     if cleaned.is_empty() {

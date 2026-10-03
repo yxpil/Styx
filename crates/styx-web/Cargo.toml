@@ -8,6 +8,8 @@ repository.workspace = true
 
 [dependencies]
 styx-core.workspace = true
+styx-guard.workspace = true
+styx-observ.workspace = true
 styx-server.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -5,25 +5,44 @@
 //! - 每个连接有一个"当前会话名"（`hello` 里指定，默认 `default`）；
 //! - 服务端持有一张 `会话名 → Kernel` 表，**内核只在处理请求时被短暂取出**，
 //!   因此不同会话之间互不阻塞（网络 IO 期间不持锁）；
-//! - 同一个会话名被两个连接同时使用时会各自拿到一个临时内核——
-//!   角色扮演的会话就该是"一个人的"，这一点在文档里说清楚比默默串线好。
+//! - 同一个会话名的并发请求**排在同一个内核上依次进行**（single-flight）：
+//!   后来者等前一个把内核放回来，而不是自己再造一个。
+//!
+//! # 为什么"表里没有"不能直接等于"新建一个"
+//!
+//! 早先的写法是"取不到就造一个"。代价不只是多花 CPU，而是**状态会倒退**：
+//! 前端在 `say` 进行中轮询 `state` 时，两个请求各拿到一个内核、各自推进再
+//! 各自放回，后放回的那个会**覆盖**先放回的那个的状态——用户看到的就是
+//! "刚说完话，状态又跳回去了"。
+//!
+//! 所以取不到时要区分两件事：**没人在用**（可以建）和**有人正在用**
+//! （必须等）。这个区分必须和会话表在同一把锁下做出，否则就成了
+//! "先检查后动作"的竞态。
 //!
 //! # 线程模型
 //!
 //! 一连接一线程。角色扮演是**低并发、高延迟**（每回合要等模型几秒到几十秒），
 //! 用异步运行时换来的收益，远不如"代码简单、能塞进 CLI"来得实在。
+//!
+//! 但"同步"不等于"不设防"。这个模型下**连接数上限就是线程数上限**：
+//! 没有准入闸门时，一个 `curl` 循环就能把线程表打满。所以连接要先过
+//! [`styx_guard::Gate`] 才允许开线程——门和关闭信号都来自 [`styx_guard`]，
+//! 且 `styx-web` 复用**同一份**：两个入口的配额应该是"这一个进程"的配额，
+//! 而不是各算各的。
 
-use std::collections::{BTreeMap, HashMap};
-use std::io::{BufRead, BufReader, Write};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use styx_core::error::{Result, StyxError};
 use styx_core::text::round3;
 use styx_core::{Kernel, Reply, Scene, TurnOutcome};
+use styx_guard::{Gate, Limits, Shutdown};
+use styx_observ::Metrics;
 
 use crate::protocol::{Request, Response};
 
@@ -56,15 +75,83 @@ pub struct ConnectionState {
     pub served: u64,
 }
 
+/// 一个常驻会话。
+///
+/// `last_used` 是 LRU 淘汰的依据。把它记在表里而不是另维护一个访问队列：
+/// 会话数上限本来就很小（几十到几百），淘汰时扫一遍找最小值足够快，
+/// 而多一个队列就多一处会不同步的地方。
+struct SessionEntry {
+    kernel: Kernel,
+    last_used: Instant,
+}
+
+/// 会话表的内部状态。
+///
+/// `map` 与 `busy` 必须在**同一把锁**下读写：取内核时要能一次原子地判断
+/// "表里没有**且**没人在用"（那就自己建），而不是先查表、再查占用——
+/// 那样两步之间别人就能插进来，又变成各建一个。
+#[derive(Default)]
+struct Sessions {
+    /// 空闲的内核，放着随时能取。
+    map: HashMap<String, SessionEntry>,
+    /// 已被取走、正在被使用（或正在构建）的会话名。
+    busy: HashSet<String>,
+}
+
+/// 等一个正在被使用的会话，最多等这么久。
+///
+/// 比模型回合的时长宽得多（长回合几分钟是常态），所以正常情况下永远等不满。
+/// 它只是"万一有 bug 把某个会话永久占住了"时的兜底，避免请求无限挂死。
+const SESSION_WAIT_LIMIT: Duration = Duration::from_secs(600);
+
+/// 会话内核的"租约"：拿到手就占住这个名字，**Drop 时不管因为什么都会归还**。
+///
+/// 用一个持有型守卫而不是"用完手动 `put_session`"，是为了 panic 安全：
+/// 处理回合的代码 panic 时，若归还这一步被跳过，这个名字就会永远卡在
+/// `busy` 里，之后所有请求都只能干等——把一个"崩一个请求"的小问题
+/// 放大成"这个会话再也用不了"的大问题。
+struct KernelLease<'a> {
+    server: &'a Server,
+    name: String,
+    /// `Option` 只是为了能在 `Drop` 里把内核 move 出去。
+    kernel: Option<Kernel>,
+}
+
+impl KernelLease<'_> {
+    fn kernel(&mut self) -> &mut Kernel {
+        self.kernel.as_mut().expect("租约期间内核一定在")
+    }
+}
+
+impl Drop for KernelLease<'_> {
+    fn drop(&mut self) {
+        if let Some(kernel) = self.kernel.take() {
+            self.server.put_session(self.name.clone(), kernel);
+        }
+    }
+}
+
 /// Styx TCP 服务。
 pub struct Server {
     factory: Arc<dyn KernelFactory>,
-    sessions: Mutex<HashMap<String, Kernel>>,
+    sessions: Mutex<Sessions>,
+    /// 有会话被放回时唤醒等待者。与会话表配成一对。
+    released: Condvar,
     /// 默认会话名。
     default_session: String,
     /// 统计。
     turns: AtomicU64,
     errors: AtomicU64,
+    /// 因配额被拒的连接数。
+    rejected: AtomicU64,
+    /// 服务层配额（默认全不限）。
+    limits: Limits,
+    /// 连接准入闸门。
+    gate: Arc<Gate>,
+    /// 关闭协调器。
+    shutdown: Arc<Shutdown>,
+    /// 指标。
+    metrics: Metrics,
 }
 
 impl std::fmt::Debug for Server {
@@ -77,14 +164,20 @@ impl std::fmt::Debug for Server {
 }
 
 impl Server {
-    /// 新建。
+    /// 新建。默认**不限连接、不限会话**——个人模式下的行为与从前一致。
     pub fn new(factory: Arc<dyn KernelFactory>) -> Self {
         Server {
             factory,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(Sessions::default()),
+            released: Condvar::new(),
             default_session: "default".into(),
             turns: AtomicU64::new(0),
             errors: AtomicU64::new(0),
+            rejected: AtomicU64::new(0),
+            limits: Limits::default(),
+            gate: Gate::new(0),
+            shutdown: Shutdown::new(),
+            metrics: Metrics::new(),
         }
     }
 
@@ -94,9 +187,54 @@ impl Server {
         self
     }
 
+    /// 设定服务层配额。
+    ///
+    /// 只在构造期可用：闸门的上限是个定值，改配额就得连闸门一起换。
+    /// 允许运行中改配额是个陷阱——已经在飞的连接还按旧上限计着账。
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.gate = Gate::new(limits.max_connections);
+        self.limits = limits;
+        self
+    }
+
+    /// 当前配额。
+    pub fn limits(&self) -> &Limits {
+        &self.limits
+    }
+
+    /// 连接闸门。`styx-web` 复用它，让两个入口共享同一份配额。
+    pub fn gate(&self) -> &Arc<Gate> {
+        &self.gate
+    }
+
+    /// 关闭协调器。`styx-web` 复用它，让两个入口共享同一个关闭信号。
+    pub fn shutdown_handle(&self) -> &Arc<Shutdown> {
+        &self.shutdown
+    }
+
+    /// 是否已进入关闭流程。
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown.is_shutting_down()
+    }
+
+    /// 当前在飞连接数。
+    pub fn in_flight(&self) -> usize {
+        self.gate.in_flight()
+    }
+
+    /// 因配额被拒的连接数。
+    pub fn rejected(&self) -> u64 {
+        self.rejected.load(Ordering::Relaxed)
+    }
+
+    /// 指标登记处。`styx-web` 靠它把 `/metrics` 和告警接出去。
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
     /// 已加载的会话数。
     pub fn session_count(&self) -> usize {
-        self.sessions.lock().map(|s| s.len()).unwrap_or(0)
+        self.sessions.lock().map(|s| s.map.len()).unwrap_or(0)
     }
 
     /// 累计回合数。
@@ -123,47 +261,164 @@ impl Server {
             .unwrap_or_default();
         println!("Styx 服务已启动：{actual}");
         println!("会话工厂：{}", self.factory.describe());
+        self.describe_limits();
+        self.describe_metrics();
         self.run(listener)
     }
 
-    /// 接受连接（阻塞）。
-    pub fn run(self: Arc<Self>, listener: TcpListener) -> Result<()> {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let server = Arc::clone(&self);
-                    std::thread::spawn(move || {
-                        if let Err(e) = server.handle_connection(stream) {
-                            eprintln!("连接结束：{e}");
-                        }
-                    });
-                }
-                Err(e) => eprintln!("接受连接失败：{e}"),
+    /// 给每个指标挂一句说明，导出的 `# HELP` 才有内容。
+    fn describe_metrics(&self) {
+        let m = &self.metrics;
+        m.describe("styx_connections_total", "累计接受的连接数");
+        m.describe("styx_rejected_total", "因配额或超限被拒的连接数");
+        m.describe("styx_in_flight", "当前正在处理的连接数");
+        m.describe("styx_sessions", "常驻会话数");
+        m.describe("styx_turns_total", "累计完成的回合数");
+        m.describe("styx_errors_total", "累计错误数");
+        m.describe("styx_turn_seconds", "一次回合的耗时（秒）");
+    }
+
+    /// 把生效的配额打一行出来。
+    ///
+    /// 配额最怕的是"配了没生效"：写在文件里、跑起来忘了、出事时才发现
+    /// 根本没读进去。启动时打一行，比翻文档快。
+    fn describe_limits(&self) {
+        let l = &self.limits;
+        let cap = |n: usize| {
+            if n > 0 {
+                n.to_string()
+            } else {
+                "不限".to_string()
             }
+        };
+        if l.limits_connections() || l.limits_sessions() || l.limits_line() {
+            println!(
+                "配额：连接 ≤ {} · 会话 ≤ {} · 单行 ≤ {} 字节 · 超限{}",
+                cap(l.max_connections),
+                cap(l.max_sessions),
+                cap(l.max_line_bytes),
+                if l.acquire_timeout_ms > 0 {
+                    format!("最多等 {} ms", l.acquire_timeout_ms)
+                } else {
+                    "立即拒绝".to_string()
+                },
+            );
+        } else {
+            println!("配额：不限（个人模式）");
+        }
+    }
+
+    /// 接受连接（阻塞）。
+    ///
+    /// 关闭时不能靠"杀进程"——那样正在跑的回合会被硬切。这里用一个
+    /// **叫醒连接**：关闭触发后主动连一次自己，让 `accept` 从阻塞里返回，
+    /// 循环看到标志位再收摊。这比"非阻塞轮询 + sleep"少一层空转。
+    pub fn run(self: Arc<Self>, listener: TcpListener) -> Result<()> {
+        if let Ok(addr) = listener.local_addr() {
+            let shutdown = Arc::clone(&self.shutdown);
+            std::thread::spawn(move || {
+                shutdown.wait_triggered();
+                // 这条连接唯一的使命就是让 accept 醒过来，内容无所谓。
+                let _ = TcpStream::connect(addr);
+            });
+        }
+
+        for stream in listener.incoming() {
+            if self.shutdown.is_shutting_down() {
+                break;
+            }
+            let stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    styx_observ::log_warn!("server", "接受连接失败：{e}");
+                    continue;
+                }
+            };
+            // 先占名额再开线程。**线程是这里唯一真正昂贵的资源**，
+            // 先开出来再判断要不要，等于白开。
+            let Some(permit) = self.gate.acquire(self.limits.acquire_timeout()) else {
+                self.rejected.fetch_add(1, Ordering::Relaxed);
+                self.metrics.inc("styx_rejected_total", 1);
+                reject_connection(stream, "hello", "服务繁忙：连接数已达上限");
+                continue;
+            };
+            self.metrics.inc("styx_connections_total", 1);
+            self.metrics
+                .set("styx_in_flight", self.gate.in_flight() as f64);
+            let server = Arc::clone(&self);
+            std::thread::spawn(move || {
+                // 凭证跟着线程走：线程正常结束、报错、甚至 panic，名额都会归还。
+                let _permit = permit;
+                if let Err(e) = server.handle_connection(stream) {
+                    styx_observ::log_debug!("server", "连接结束：{e}");
+                }
+            });
+        }
+
+        // 不再收新连接了，等在飞的干完。
+        let drained = self.shutdown.wait_idle(self.limits.drain_timeout());
+        if drained {
+            styx_observ::log_info!("server", "已停止接受连接，在飞请求已收尾");
+        } else {
+            styx_observ::log_warn!(
+                "server",
+                "已停止接受连接，但仍有 {} 个请求没收尾（超过 {} ms）",
+                self.shutdown.active(),
+                self.limits.drain_timeout_ms
+            );
         }
         Ok(())
     }
 
     /// 处理一条连接。
     pub fn handle_connection(&self, stream: TcpStream) -> Result<()> {
+        // 先登记"我在飞"。已经在关闭中就不再受理——让对端早点知道，
+        // 比收下请求再中途砍断要好。
+        let Some(_inflight) = self.shutdown.enter() else {
+            let mut s = stream;
+            let msg = format!(
+                "{}\n",
+                Response::err("hello", "服务正在关闭，请稍后重连").to_line()
+            );
+            let _ = s.write_all(msg.as_bytes());
+            let _ = s.flush();
+            return Ok(());
+        };
+
         stream.set_read_timeout(Some(Duration::from_secs(600))).ok();
         stream.set_nodelay(true).ok();
-        let reader = BufReader::new(
+        let mut reader = BufReader::new(
             stream
                 .try_clone()
                 .map_err(|e| StyxError::Other(format!("复制套接字失败：{e}")))?,
         );
         let mut writer = stream;
         let mut state = ConnectionState::default();
+        let max_line = self.limits.max_line_bytes;
+        let mut line = String::new();
 
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(e) => {
-                    eprintln!("读取请求失败：{e}");
+        loop {
+            line.clear();
+            match read_line_limited(&mut reader, max_line, &mut line) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::InvalidData => {
+                    // 超长行必须**断开**而不是跳过：流里的位置已经错位，
+                    // 接着读只会把后面半截当成一条新请求。
+                    self.rejected.fetch_add(1, Ordering::Relaxed);
+                    let msg = format!("{}\n", Response::err("read", e.to_string()).to_line());
+                    let _ = writer.write_all(msg.as_bytes());
+                    let _ = writer.flush();
+                    let _ = writer.shutdown(std::net::Shutdown::Write);
+                    let _ = writer.set_read_timeout(Some(Duration::from_millis(100)));
+                    drain_until_quiet(&mut reader);
                     break;
                 }
-            };
+                Err(e) => {
+                    styx_observ::log_warn!("server", "读取请求失败：{e}");
+                    break;
+                }
+            }
             if line.trim().is_empty() {
                 continue;
             }
@@ -197,6 +452,7 @@ impl Server {
             Ok((resp, close)) => (resp, close),
             Err(e) => {
                 self.errors.fetch_add(1, Ordering::Relaxed);
+                self.metrics.inc("styx_errors_total", 1);
                 (Response::err(&op, e.to_string()), false)
             }
         }
@@ -213,34 +469,30 @@ impl Server {
                 let name = session
                     .filter(|s| !s.trim().is_empty())
                     .unwrap_or_else(|| self.default_session.clone());
-                // 提前把内核造出来，失败就在握手里告诉客户端
-                let created = self
+                // `resumed` 只是给客户端一句"接着上次"的提示，允许有极小竞态。
+                // `busy` 里的也算已存在——它只是正被某个请求拿着，不是没有。
+                let resumed = self
                     .sessions
                     .lock()
-                    .map(|s| s.contains_key(&name))
+                    .map(|s| s.map.contains_key(&name) || s.busy.contains(&name))
                     .unwrap_or(false);
-                if !created {
-                    let kernel = self.factory.create(&name)?;
-                    if let Ok(mut map) = self.sessions.lock() {
-                        map.insert(name.clone(), kernel);
-                    }
-                }
                 state.session = Some(name.clone());
-                let (card, turn, transcript) = self
-                    .with_kernel(&name, |k| {
-                        Ok((
-                            k.card().name.clone(),
-                            k.state().turn,
-                            k.session().transcript.len(),
-                        ))
-                    })
-                    .unwrap_or_else(|_| (String::new(), 0, 0));
+                // 内核按需构建：下面的 with_kernel 会走 single-flight 路径把它
+                // 建出来。**失败要往上抛**，不能吞——握手时就得让客户端知道
+                // "这个会话起不来"，而不是回一句 hello 之后每个请求都报错。
+                let (card, turn, transcript) = self.with_kernel(&name, |k| {
+                    Ok((
+                        k.card().name.clone(),
+                        k.state().turn,
+                        k.session().transcript.len(),
+                    ))
+                })?;
                 Ok((
                     Response::ok(
                         "hello",
                         json!({
                             "session": name,
-                            "resumed": created,
+                            "resumed": resumed,
                             "card": card,
                             "turn": turn,
                             "transcript": transcript,
@@ -258,15 +510,17 @@ impl Server {
 
             Request::Say { text } => {
                 let name = self.ensure_session(state)?;
+                let started = Instant::now();
                 let outcome = self.with_kernel(&name, |k| k.turn(&text))?;
-                self.turns.fetch_add(1, Ordering::Relaxed);
+                self.observe_turn(started);
                 Ok((self.turn_response(&name, "say", &outcome), false))
             }
 
             Request::Sticker { id } => {
                 let name = self.ensure_session(state)?;
+                let started = Instant::now();
                 let outcome = self.with_kernel(&name, |k| k.send_sticker(&id))?;
-                self.turns.fetch_add(1, Ordering::Relaxed);
+                self.observe_turn(started);
                 Ok((self.turn_response(&name, "sticker", &outcome), false))
             }
 
@@ -447,6 +701,19 @@ impl Server {
                     m.insert("sessions".into(), json!(self.session_count()));
                     m.insert("server_turns".into(), json!(self.turns()));
                     m.insert("server_errors".into(), json!(self.errors()));
+                    // 服务层自身的状态也要能被看到：出问题时第一个要回答的
+                    // 问题是"是模型慢，还是连接被卡住了"。
+                    m.insert("in_flight".into(), json!(self.in_flight()));
+                    m.insert("rejected".into(), json!(self.rejected()));
+                    m.insert("shutting_down".into(), json!(self.is_shutting_down()));
+                    m.insert(
+                        "limits".into(),
+                        json!({
+                            "max_connections": self.limits.max_connections,
+                            "max_sessions": self.limits.max_sessions,
+                            "max_line_bytes": self.limits.max_line_bytes,
+                        }),
+                    );
                     m.insert("factory".into(), json!(self.factory.describe()));
                 }
                 Ok((Response::ok("status", v), false))
@@ -512,12 +779,9 @@ impl Server {
                         .map_err(|e| StyxError::Other(format!("场景格式非法：{e}")))?,
                     None => Scene::default(),
                 };
-                let fresh = self.factory.create(&name)?;
-                let mut fresh = fresh;
+                let mut fresh = self.factory.create(&name)?;
                 fresh.set_scene(scene);
-                if let Ok(mut map) = self.sessions.lock() {
-                    map.insert(name.clone(), fresh);
-                }
+                self.put_session(name.clone(), fresh);
                 state.session = Some(name.clone());
                 Ok((
                     Response::ok("reset", json!({ "session": name, "reset": true })),
@@ -537,26 +801,137 @@ impl Server {
             return Ok(s.clone());
         }
         let name = self.default_session.clone();
-        let kernel = self.factory.create(&name)?;
-        if let Ok(mut map) = self.sessions.lock() {
-            map.insert(name.clone(), kernel);
-        }
+        // 借一次租约把内核建出来、再立刻放回（Drop 时归还）。
+        // 走同一条 single-flight 路径，并发时不会重复建；同时"建不出来"
+        // 能在这一步就报给调用者，而不是拖到第一次用的时候。
+        drop(self.acquire_kernel(&name)?);
         state.session = Some(name.clone());
         Ok(name)
     }
 
     /// 取出内核 → 用它 → 放回。**全程不持锁**，避免一个慢回合卡住所有连接。
+    ///
+    /// 注意这里"不持锁"指的是不抱着会话表的锁去跑回合，不是"不互斥"：
+    /// 同一个会话名同一时刻只有一个租约，后来者会在 [`Server::acquire_kernel`]
+    /// 里等着——同一会话本来也不该有两个回合同时推进。
     fn with_kernel<T>(&self, name: &str, f: impl FnOnce(&mut Kernel) -> Result<T>) -> Result<T> {
-        let existing = { self.sessions.lock().ok().and_then(|mut m| m.remove(name)) };
-        let mut kernel = match existing {
-            Some(k) => k,
-            None => self.factory.create(name)?,
+        let mut lease = self.acquire_kernel(name)?;
+        f(lease.kernel())
+        // lease 在这里 Drop，内核随之归还——正常返回与 panic 展开都走这条路。
+    }
+
+    /// 取得某个会话名的租约：空闲的直接拿走，正在被用的等它回来，
+    /// 表里没有且没人在用的才新建。
+    ///
+    /// 等而不是新建的理由见文件头的"为什么表里没有不能直接等于新建一个"。
+    fn acquire_kernel(&self, name: &str) -> Result<KernelLease<'_>> {
+        let Ok(mut sessions) = self.sessions.lock() else {
+            // 锁中毒：退化成"每次自建"。宁可退一点效率，也不能把请求全掐了。
+            return self
+                .factory
+                .create(name)
+                .map(|kernel| self.lease(name, kernel));
         };
-        let out = f(&mut kernel);
-        if let Ok(mut map) = self.sessions.lock() {
-            map.insert(name.to_string(), kernel);
+        let started = Instant::now();
+
+        loop {
+            if let Some(entry) = sessions.map.remove(name) {
+                sessions.busy.insert(name.to_string());
+                return Ok(self.lease(name, entry.kernel));
+            }
+
+            // 表里没有。是"没人在用"还是"有人正在用"？这一步必须和上面
+            // 的 remove 在同一把锁里判断，否则两个请求会同时认为"没人在用"。
+            if sessions.busy.insert(name.to_string()) {
+                // 由我来建。占位已经打上，别的请求会去等而不是重复建。
+                drop(sessions);
+                let built = self.factory.create(name);
+                if built.is_err() {
+                    // 建失败必须把占位摘掉，否则这个名字会被永久卡住。
+                    if let Ok(mut s) = self.sessions.lock() {
+                        s.busy.remove(name);
+                    }
+                    self.released.notify_all();
+                }
+                return built.map(|kernel| self.lease(name, kernel));
+            }
+
+            // 有人正在用/正在建：等它放回。
+            let (guard, timeout) = self
+                .released
+                .wait_timeout(sessions, Duration::from_millis(50))
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            sessions = guard;
+            if timeout.timed_out() && started.elapsed() >= SESSION_WAIT_LIMIT {
+                return Err(StyxError::Other(format!(
+                    "会话 `{name}` 被占用超过 {} 秒仍未释放",
+                    SESSION_WAIT_LIMIT.as_secs()
+                )));
+            }
         }
-        out
+    }
+
+    /// 造一个租约（不改会话表——占位已在 `acquire_kernel` 里打好）。
+    fn lease<'a>(&'a self, name: &str, kernel: Kernel) -> KernelLease<'a> {
+        KernelLease {
+            server: self,
+            name: name.to_string(),
+            kernel: Some(kernel),
+        }
+    }
+
+    /// 放回一个会话，并在超出上限时淘汰最久未动的。
+    ///
+    /// 正在被使用的会话**不在 `map` 里**（租约把它取走了），所以它
+    /// 不可能被淘汰——这一点很关键：淘汰掉一个正在跑长回合的会话，
+    /// 用户看到的就是"说着说着角色失忆了"。
+    fn put_session(&self, name: String, kernel: Kernel) {
+        {
+            let Ok(mut sessions) = self.sessions.lock() else {
+                return;
+            };
+            sessions.map.insert(
+                name.clone(),
+                SessionEntry {
+                    kernel,
+                    last_used: Instant::now(),
+                },
+            );
+            sessions.busy.remove(&name);
+            let max = self.limits.max_sessions;
+            if max > 0 {
+                while sessions.map.len() > max {
+                    let victim = sessions
+                        .map
+                        .iter()
+                        .filter(|(k, _)| k.as_str() != name.as_str())
+                        .min_by_key(|(_, e)| e.last_used)
+                        .map(|(k, _)| k.clone());
+                    match victim {
+                        Some(k) => {
+                            sessions.map.remove(&k);
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        // 先唤醒等待者，再读指标：等待者能早一点拿到内核，
+        // 而指标那一步要再加一次锁，放在临界区外面更干净。
+        self.released.notify_all();
+        self.metrics
+            .set("styx_sessions", self.session_count() as f64);
+    }
+
+    /// 记一次回合：计数 + 耗时。
+    ///
+    /// 耗时走直方图而不是平均值——平均值会把"多数 2 秒、偶尔 60 秒"
+    /// 抹成一个看起来很健康的数字，而坏体验恰恰全在尾部。
+    fn observe_turn(&self, started: Instant) {
+        self.turns.fetch_add(1, Ordering::Relaxed);
+        self.metrics.inc("styx_turns_total", 1);
+        self.metrics
+            .observe("styx_turn_seconds", started.elapsed().as_secs_f64());
     }
 
     /// 把一个回合的结果整理成响应。
@@ -615,6 +990,70 @@ impl Server {
             }),
         )
     }
+}
+
+/// 读一行，并在**超长时立刻停下**。
+///
+/// `BufRead::lines()` 没有上限：一个 5 MB 的"单行"会先被**完整读进内存**，
+/// 再交给我们判断——防护写在下游是防不住资源耗尽的。这里用 `take` 把读取量
+/// 钉死在 `max + 1` 字节：多读的那 1 字节就是"超了"的证据，而且根本不会
+/// 为超长输入分配更大的缓冲。
+///
+/// `max == 0` 表示不限。返回读到的字节数，`0` 表示对端已关闭。
+fn read_line_limited<R: BufRead>(
+    reader: &mut R,
+    max: usize,
+    out: &mut String,
+) -> std::io::Result<usize> {
+    let mut buf: Vec<u8> = Vec::new();
+    let n = if max == 0 {
+        reader.read_until(b'\n', &mut buf)?
+    } else {
+        let mut limited = reader.by_ref().take(max as u64 + 1);
+        let n = limited.read_until(b'\n', &mut buf)?;
+        if n > max {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("单行超过 {max} 字节上限"),
+            ));
+        }
+        n
+    };
+    if n == 0 {
+        return Ok(0);
+    }
+    let text = std::str::from_utf8(&buf)
+        .map_err(|_| std::io::Error::new(ErrorKind::InvalidData, "请求不是合法 UTF-8"))?;
+    out.push_str(text.trim_end_matches(['\n', '\r']));
+    Ok(n)
+}
+
+/// 读掉对端在途的字节，最多 256 KB。
+///
+/// 存在的理由只有一个：**带着未读数据关闭 socket，内核会直接回 RST**
+/// 而不是正常的 FIN，而 RST 会把刚写出去、还躺在对端接收缓冲里的响应
+/// 一并冲掉。于是"服务繁忙"在客户端眼里就变成了"连接被重置"。
+fn drain_until_quiet<R: Read>(reader: &mut R) {
+    let mut sink = [0u8; 4096];
+    let mut drained = 0usize;
+    while drained < 256 * 1024 {
+        match reader.read(&mut sink) {
+            Ok(0) => break,
+            Ok(n) => drained += n,
+            Err(_) => break,
+        }
+    }
+}
+
+/// 拒绝一条连接：把话说清楚，再体面地关上。
+fn reject_connection(mut stream: TcpStream, op: &str, message: &str) {
+    let msg = format!("{}\n", Response::err(op, message).to_line());
+    let _ = stream.write_all(msg.as_bytes());
+    let _ = stream.flush();
+    // 半关闭写端：对端读到 EOF 就知道"话说完了"，不必靠超时去猜。
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+    drain_until_quiet(&mut stream);
 }
 
 /// 回复 → JSON。
@@ -1056,5 +1495,230 @@ mod tests {
         // 连接必须还能继续用
         let v = call(&s, &mut st, r#"{"op":"ping"}"#);
         assert_eq!(v["pong"], true);
+    }
+
+    // ------------------------------------------------------------ 服务层防护
+
+    /// 造一个带配额的服务器。
+    fn guarded(limits: Limits) -> Arc<Server> {
+        Arc::new(Server::new(Arc::new(|s: &str| offline_kernel(s))).with_limits(limits))
+    }
+
+    /// 起一个真服务，返回监听地址。
+    fn spawn_server(server: Arc<Server>) -> std::net::SocketAddr {
+        let listener = server.bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let _ = server.run(listener);
+        });
+        addr
+    }
+
+    fn send_recv(stream: &TcpStream, line: &str) -> Value {
+        let mut w = stream.try_clone().unwrap();
+        let mut r = BufReader::new(stream.try_clone().unwrap());
+        w.write_all(format!("{line}\n").as_bytes()).unwrap();
+        w.flush().unwrap();
+        let mut buf = String::new();
+        r.read_line(&mut buf).unwrap();
+        serde_json::from_str(&buf).unwrap()
+    }
+
+    #[test]
+    fn connections_beyond_the_cap_are_refused() {
+        let s = guarded(Limits {
+            max_connections: 1,
+            ..Limits::default()
+        });
+        let addr = spawn_server(Arc::clone(&s));
+
+        let held = TcpStream::connect(addr).unwrap();
+        held.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let v = send_recv(&held, r#"{"op":"ping"}"#);
+        assert_eq!(v["pong"], true, "第一条连接应当正常");
+
+        // 名额已经被第一条占住，第二条必须被**明确拒绝**，
+        // 而不是排队等着（等下去就是线程表被慢慢磨光）。
+        let second = TcpStream::connect(addr).unwrap();
+        second
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let v = send_recv(&second, r#"{"op":"ping"}"#);
+        assert_eq!(v["ok"], false, "{v:?}");
+        assert!(v["error"].as_str().unwrap().contains("上限"), "{v:?}");
+        assert_eq!(s.rejected(), 1);
+        assert_eq!(s.in_flight(), 1);
+    }
+
+    #[test]
+    fn an_oversized_line_is_rejected_instead_of_swallowed() {
+        let s = guarded(Limits {
+            max_line_bytes: 256,
+            ..Limits::default()
+        });
+        let addr = spawn_server(Arc::clone(&s));
+
+        let mut c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        // 正好比上限多 1 字节：服务端读满就停，不会为它分配更大的缓冲，
+        // 也不会把后面半截当成一条新请求。
+        c.write_all("x".repeat(257).as_bytes()).unwrap();
+        c.flush().unwrap();
+
+        let mut r = BufReader::new(c.try_clone().unwrap());
+        let mut line = String::new();
+        r.read_line(&mut line).unwrap();
+        assert!(line.contains("超过"), "{line}");
+        assert_eq!(s.rejected(), 1);
+    }
+
+    #[test]
+    fn sessions_beyond_the_cap_evict_the_least_recently_used() {
+        let s = guarded(Limits {
+            max_sessions: 2,
+            ..Limits::default()
+        });
+        let mut a = ConnectionState::default();
+        let mut b = ConnectionState::default();
+        let mut c = ConnectionState::default();
+
+        call(&s, &mut a, r#"{"op":"hello","session":"a"}"#);
+        std::thread::sleep(Duration::from_millis(3));
+        call(&s, &mut b, r#"{"op":"hello","session":"b"}"#);
+        assert_eq!(s.session_count(), 2);
+
+        std::thread::sleep(Duration::from_millis(3));
+        call(&s, &mut c, r#"{"op":"hello","session":"c"}"#);
+        assert_eq!(s.session_count(), 2, "超上限应当淘汰，而不是无界增长");
+
+        // a 最久没动过 → 应当是被淘汰的那个
+        let v = call(&s, &mut a, r#"{"op":"hello","session":"a"}"#);
+        assert_eq!(v["resumed"], false, "a 应当已被淘汰");
+        // c 刚建过 → 还在
+        let v = call(&s, &mut c, r#"{"op":"hello","session":"c"}"#);
+        assert_eq!(v["resumed"], true, "c 不该被淘汰");
+    }
+
+    #[test]
+    fn status_reports_the_service_layer() {
+        let s = guarded(Limits::production());
+        let mut st = ConnectionState::default();
+        call(&s, &mut st, r#"{"op":"hello"}"#);
+        let v = call(&s, &mut st, r#"{"op":"status"}"#);
+        assert_eq!(v["shutting_down"], false);
+        assert_eq!(v["rejected"], 0);
+        assert_eq!(v["limits"]["max_connections"], 64);
+        assert_eq!(v["limits"]["max_sessions"], 256);
+    }
+
+    #[test]
+    fn shutdown_lets_run_return_instead_of_hanging_on_accept() {
+        let s = guarded(Limits {
+            drain_timeout_ms: 1_000,
+            ..Limits::default()
+        });
+        let listener = s.bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = Arc::clone(&s);
+        let runner = std::thread::spawn(move || server.run(listener));
+
+        let c = TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let v = send_recv(&c, r#"{"op":"ping"}"#);
+        assert_eq!(v["pong"], true);
+
+        // 客户端走人 → 服务端的连接线程读到 EOF 自行收摊
+        drop(c);
+        s.shutdown_handle().trigger();
+
+        runner
+            .join()
+            .expect("run 不该 panic")
+            .expect("run 应当正常返回，而不是卡在 accept 上");
+        assert!(s.is_shutting_down());
+        assert_eq!(s.shutdown_handle().active(), 0, "收尾之后不该还有在飞请求");
+    }
+
+    // -------------------------------------------------- 同会话并发（single-flight）
+
+    /// 一个"造得慢"的服务器，外加构建次数计数。
+    ///
+    /// 慢是刻意的：只有把构建时间拉长，并发请求才会真的撞进
+    /// "表里还没有"的那个窗口里。构建快的时候这个窗口只有几十微秒，
+    /// 测试会时灵时不灵。
+    fn slow_building(create_ms: u64) -> (Arc<Server>, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::AtomicUsize;
+        let built = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&built);
+        let server = Arc::new(Server::new(Arc::new(move |s: &str| {
+            std::thread::sleep(Duration::from_millis(create_ms));
+            counter.fetch_add(1, Ordering::SeqCst);
+            offline_kernel(s)
+        })));
+        (server, built)
+    }
+
+    /// 同一个会话的并发请求只应构建**一次**内核。
+    ///
+    /// 这条测试守的是一个会丢状态的 bug：早先"取不到就新建"，于是并发
+    /// 请求各拿一个内核、各自推进再各自放回，后放回的覆盖先放回的。
+    #[test]
+    fn concurrent_requests_for_one_session_build_the_kernel_once() {
+        let (server, built) = slow_building(100);
+        let addr = spawn_server(Arc::clone(&server));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let s = TcpStream::connect(addr).unwrap();
+                    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+                    send_recv(&s, r#"{"op":"state"}"#)
+                })
+            })
+            .collect();
+        let replies: Vec<Value> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        for v in &replies {
+            assert_eq!(v["ok"], true, "并发 state 都应当成功：{v}");
+        }
+        assert_eq!(
+            built.load(Ordering::SeqCst),
+            1,
+            "同一会话的并发请求只应构建一次内核——构建多次意味着它们拿到了\
+             不同的内核，状态会互相覆盖"
+        );
+    }
+
+    /// 并发回合必须**一个不少地**落进同一份状态里。
+    ///
+    /// 这是上一条测试的行为侧对照：光数"构建了几次"能证明没重复建，
+    /// 却不能证明回合没丢。所以这里数回合数——6 个并发 `say` 之后，
+    /// 状态里的 `turn` 必须正好是 6。修复前它会停在 1（先放回的被覆盖）。
+    #[test]
+    fn concurrent_turns_on_one_session_do_not_lose_state() {
+        let (server, _built) = slow_building(80);
+        let addr = spawn_server(Arc::clone(&server));
+
+        let handles: Vec<_> = (0..6)
+            .map(|i| {
+                std::thread::spawn(move || {
+                    let s = TcpStream::connect(addr).unwrap();
+                    s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+                    send_recv(&s, &format!(r#"{{"op":"say","text":"第 {i} 句"}}"#))
+                })
+            })
+            .collect();
+        for h in handles {
+            let v = h.join().unwrap();
+            assert_eq!(v["ok"], true, "并发 say 都应当成功：{v}");
+        }
+
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let st = send_recv(&s, r#"{"op":"state"}"#);
+        assert_eq!(
+            st["turn"], 6,
+            "6 个并发回合应当全部落在同一份状态上，一个都不能丢：{st}"
+        );
     }
 }

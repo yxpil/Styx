@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use styx_core::{KernelConfig, PromptBudget, Scene};
+use styx_guard::Limits;
 use styx_llm::Endpoint;
+use styx_observ::{AlertRule, Comparison, Severity};
 
 /// 默认配置文件名（在 CWD 里自动发现）。
 pub const FILE_NAME: &str = "styx.toml";
@@ -26,6 +28,12 @@ pub struct Config {
     pub pool: PoolSection,
     pub tools: ToolsSection,
     pub web: WebSection,
+    /// 服务层配额（连接数 / 会话数 / 单行长度）。默认全不限。
+    pub limits: LimitsSection,
+    /// 可观测性（日志与告警）。
+    pub observability: ObservabilitySection,
+    /// 访问控制。
+    pub auth: AuthSection,
 }
 
 impl Config {
@@ -176,7 +184,11 @@ impl KernelSection {
                 "" | "default" => PromptBudget::default(),
                 "compact" | "small" | "tiny" => PromptBudget::compact(),
                 "large" | "big" => PromptBudget::large(),
-                other => return Err(format!("未知的 kernel.budget：{other}（可选 default/compact/large）")),
+                other => {
+                    return Err(format!(
+                        "未知的 kernel.budget：{other}（可选 default/compact/large）"
+                    ))
+                }
             };
         }
         Ok(())
@@ -209,12 +221,23 @@ impl LlmSection {
     /// 环境变量命名规则：`STYX_LLM_<NAME>_BASE_URL` / `_MODEL` / `_API_KEY`，
     /// 其中 `<NAME>` 取自下面这份候选名单（大写、连字符换下划线）。
     pub fn resolved_endpoints(&self) -> Vec<Endpoint> {
-        let from_cfg: Vec<Endpoint> = self.endpoints.iter().filter(|e| e.enabled).cloned().collect();
+        let from_cfg: Vec<Endpoint> = self
+            .endpoints
+            .iter()
+            .filter(|e| e.enabled)
+            .cloned()
+            .collect();
         if !from_cfg.is_empty() {
             return from_cfg;
         }
         styx_llm::from_env(&[
-            "primary", "secondary", "tertiary", "openai", "deepseek", "ollama", "local",
+            "primary",
+            "secondary",
+            "tertiary",
+            "openai",
+            "deepseek",
+            "ollama",
+            "local",
         ])
         .into_iter()
         .filter(|e| e.enabled)
@@ -374,6 +397,183 @@ impl Default for WebSection {
             open: false,
             request_log: false,
         }
+    }
+}
+
+// ---------------------------------------------------------------- 服务层配额
+
+/// `[limits]`：服务层配额。
+///
+/// 写 `preset = "production"` 就能一次性拿到一份保守档，再按需要覆盖单项。
+/// 不写就是个人模式——**不限制任何东西**，行为和从前一模一样。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LimitsSection {
+    /// 预设：`personal`（默认）/ `production`。
+    pub preset: Option<String>,
+    pub max_connections: Option<usize>,
+    pub max_sessions: Option<usize>,
+    pub max_line_bytes: Option<usize>,
+    pub acquire_timeout_ms: Option<u64>,
+    pub drain_timeout_ms: Option<u64>,
+}
+
+impl LimitsSection {
+    /// 预设打底，逐项覆盖。
+    pub fn resolve(&self) -> Result<Limits, String> {
+        let mut l = match self.preset.as_deref().map(str::trim) {
+            None | Some("") | Some("personal") | Some("local") | Some("single") => {
+                Limits::default()
+            }
+            Some("production") | Some("prod") | Some("server") => Limits::production(),
+            Some(other) => {
+                return Err(format!(
+                    "未知的 limits.preset：{other}（可选 personal / production）"
+                ))
+            }
+        };
+        if let Some(v) = self.max_connections {
+            l.max_connections = v;
+        }
+        if let Some(v) = self.max_sessions {
+            l.max_sessions = v;
+        }
+        if let Some(v) = self.max_line_bytes {
+            l.max_line_bytes = v;
+        }
+        if let Some(v) = self.acquire_timeout_ms {
+            l.acquire_timeout_ms = v;
+        }
+        if let Some(v) = self.drain_timeout_ms {
+            l.drain_timeout_ms = v;
+        }
+        Ok(l)
+    }
+}
+
+// -------------------------------------------------------------------- 访问控制
+
+/// `[auth]`：访问控制。
+///
+/// 只有一项，而且默认是空的。这是有意的：**个人使用不该被登录挡住**。
+/// 一旦监听地址不再是本机专属，`styx web` 会在启动时把这个事实喊出来。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AuthSection {
+    /// 访问令牌。留空 = 不校验。建议用 `styx web --generate-token` 生成。
+    pub token: String,
+}
+
+impl AuthSection {
+    /// 解析成令牌；空串返回 `None`。
+    pub fn resolved(&self) -> Option<styx_guard::Token> {
+        styx_guard::Token::new(self.token.clone())
+    }
+}
+
+// ---------------------------------------------------------------- 可观测性
+
+/// `[observability]`：日志与告警。
+///
+/// 告警默认**关着**。理由和 `Limits` 一样：一个人自己用的时候，
+/// 不该有东西在背后自己响；对外提供服务时再打开。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ObservabilitySection {
+    /// 日志级别：`error` / `warn` / `info` / `debug` / `trace`。
+    pub log_level: String,
+    /// 日志格式：`pretty`（人看）/ `json`（JSON Lines，给采集器）。
+    pub log_format: String,
+    /// 是否启用内置告警规则（在有人拉 `/metrics` 时评估）。
+    pub alerts: bool,
+}
+
+impl Default for ObservabilitySection {
+    fn default() -> Self {
+        ObservabilitySection {
+            log_level: "info".into(),
+            log_format: "pretty".into(),
+            alerts: false,
+        }
+    }
+}
+
+impl ObservabilitySection {
+    /// 解析日志级别。
+    pub fn level(&self) -> Result<styx_observ::Level, String> {
+        styx_observ::Level::parse(&self.log_level).ok_or_else(|| {
+            format!(
+                "未知的 observability.log_level：{}（可选 error/warn/info/debug/trace）",
+                self.log_level
+            )
+        })
+    }
+
+    /// 解析日志格式。
+    pub fn format(&self) -> Result<styx_observ::Format, String> {
+        styx_observ::Format::parse(&self.log_format).ok_or_else(|| {
+            format!(
+                "未知的 observability.log_format：{}（可选 pretty/json）",
+                self.log_format
+            )
+        })
+    }
+
+    /// 内置告警规则。
+    ///
+    /// 只挑"确实说明出了问题"的量。刻意没有给错误数设一个很低的阈值：
+    /// 角色扮演里偶尔一次模型超时是正常波动，一条会被正常波动触发的
+    /// 告警，训练出来的只是"看到就关掉"。
+    pub fn alert_rules(&self, max_connections: usize) -> Vec<AlertRule> {
+        if !self.alerts {
+            return Vec::new();
+        }
+        let mut rules = vec![
+            AlertRule::new(
+                "styx_errors_high",
+                "styx_errors_total",
+                Comparison::Above,
+                50.0,
+            )
+            .cooldown_secs(300)
+            .severity(Severity::Warning)
+            .summary("累计错误数偏高"),
+            AlertRule::new(
+                "styx_rejections_high",
+                "styx_rejected_total",
+                Comparison::Above,
+                100.0,
+            )
+            .cooldown_secs(300)
+            .severity(Severity::Warning)
+            .summary("大量连接被拒：配额可能太紧，或者正在被压"),
+            AlertRule::new(
+                "styx_http_5xx",
+                "styx_http_5xx_total",
+                Comparison::Above,
+                20.0,
+            )
+            .cooldown_secs(300)
+            .severity(Severity::Critical)
+            .summary("服务端错误响应增多"),
+        ];
+        if max_connections > 0 {
+            // 80% 就报，而不是 100%：等到打满的那一刻，拒绝已经在发生了。
+            let threshold = (max_connections as f64 * 0.8).max(1.0);
+            rules.push(
+                AlertRule::new(
+                    "styx_connections_saturated",
+                    "styx_in_flight",
+                    Comparison::Above,
+                    threshold,
+                )
+                .for_secs(30)
+                .cooldown_secs(300)
+                .severity(Severity::Critical)
+                .summary("连接数接近上限并持续了 30 秒"),
+            );
+        }
+        rules
     }
 }
 

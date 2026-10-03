@@ -20,6 +20,8 @@ styx-memory = { workspace = true }
 styx-assoc = { workspace = true }
 styx-pool = { workspace = true, features = ["http"] }
 styx-tools = { workspace = true, features = ["http"] }
+styx-guard = { workspace = true }
+styx-observ = { workspace = true }
 styx-server = { workspace = true }
 styx-web = { workspace = true }
 

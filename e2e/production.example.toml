@@ -1,0 +1,64 @@
+# 对外提供服务时的配置参考。
+#
+# 当起点用，不要照抄——尤其是 [limits] 里那几个数字，它们取决于
+# 这台机器有多少内存和多少核。
+#
+# 与个人用法的差别全在最后三节：**配额、可观测性、访问控制**。
+# 这三节一封都不写就是"不限连接、只记日志、不要令牌"，
+# 也就是 `styx repl` / `styx web` 绑 127.0.0.1 时的默认状态。
+
+[character]
+card = "examples/cards/linxia.md"
+user_name = "陈默"
+
+# ------------------------------------------------------------------ 配额
+#
+# `preset = "production"` 给一份保守档：
+#   max_connections  = 64      同时处理的连接数
+#   max_sessions     = 256     常驻会话数（超出淘汰最久未动的）
+#   max_line_bytes   = 256 KiB 单行请求上限
+#   acquire_timeout  = 1s      等不到名额时的排队上限
+#   drain_timeout    = 10s     优雅关闭时等在飞请求的上限
+#
+# 注意 `max_connections` **不是**随手可调大的：一连接一线程，
+# 8 MB 栈 × 256 就是 2 GB 虚拟地址空间。真要往上走，先换连接复用。
+[limits]
+preset = "production"
+# 单项覆盖预设：
+# max_connections = 128
+# max_sessions = 512
+
+# ---------------------------------------------------------------- 可观测性
+#
+# 上线后把 log_format 改成 "json"，采集器认这个；
+# 本地排查时 pretty 更好读。
+#
+# alerts = true 会挂上几条内置规则（错误数、被拒数、连接饱和），
+# 在有人拉 `/metrics` 的那一刻评估。规则和投递端都在
+# `crates/styx-cli/src/config.rs` 的 `alert_rules` 里，
+# 想加自己的规则改那里最直接。
+[observability]
+log_level = "info"
+log_format = "pretty"
+alerts = true
+
+# ------------------------------------------------------------------ 访问控制
+#
+# 生成一个：styx web --generate-token
+# 也可以用环境变量 STYX_TOKEN，免得令牌落进配置文件和历史记录。
+#
+# 设了令牌之后，除了 /healthz /readyz /metrics（探针和采集器不带凭据），
+# 其余请求都要带：Authorization: Bearer <token> / X-Styx-Token / ?token=<token>
+[auth]
+token = "把 styx web --generate-token 的输出粘到这里"
+
+# -------------------------------------------------------------------- 前端
+#
+# 绑 0.0.0.0 之前，先确认 [auth] 里有令牌。
+# 启动时会把"这个地址有多开放"打出来，但提示不会替你挡住人。
+[web]
+addr = "0.0.0.0:8770"
+stickers = "crates/styx-web/web/stickers"
+session = "web"
+open = false
+request_log = false
