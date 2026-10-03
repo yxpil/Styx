@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Styx · 角色扮演</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot" id="conn-dot" title="连接状态"></span>
+    <strong>Styx</strong>
+  </div>
+  <div class="who">
+    <span id="card-name">…</span>
+    <span class="sep">·</span>
+    <span id="scene-line" class="muted">正在接入…</span>
+  </div>
+  <div class="actions">
+    <button id="btn-inspect" class="ghost" title="状态与调试面板">状态</button>
+    <button id="btn-reset" class="ghost" title="清空这一场戏">重置</button>
+  </div>
+</header>
+
+<main>
+  <section id="stage" class="stage" aria-live="polite"></section>
+
+  <aside id="inspector" class="inspector">
+    <div class="card">
+      <h3>此刻</h3>
+      <div id="mood-line" class="mood">—</div>
+      <div class="meters">
+        <div class="meter"><label>精力</label><div class="bar"><i id="m-energy"></i></div><span id="v-energy">—</span></div>
+        <div class="meter"><label>紧张</label><div class="bar"><i id="m-tension"></i></div><span id="v-tension">—</span></div>
+        <div class="meter"><label>效价</label><div class="bar bipolar"><i id="m-valence"></i></div><span id="v-valence">—</span></div>
+        <div class="meter"><label>唤醒</label><div class="bar"><i id="m-arousal"></i></div><span id="v-arousal">—</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>关系</h3>
+      <div id="relations" class="relations muted">暂无</div>
+    </div>
+
+    <div class="card">
+      <h3>场景</h3>
+      <div id="scene-box" class="kv muted">—</div>
+    </div>
+
+    <div class="card">
+      <h3>本回合</h3>
+      <div id="report" class="kv muted">还没有回合。</div>
+    </div>
+
+    <div class="card">
+      <h3>召回 / 联想</h3>
+      <div id="memory-box" class="chips"></div>
+      <div id="assoc-box" class="chips"></div>
+    </div>
+
+    <div class="card">
+      <h3>后端</h3>
+      <div id="status-box" class="kv muted">—</div>
+    </div>
+  </aside>
+</main>
+
+<footer class="composer">
+  <div id="sticker-panel" class="sticker-panel" hidden>
+    <div class="sticker-head">
+      <input id="sticker-search" type="search" placeholder="搜索表情：开心 / cry / 贴图" autocomplete="off">
+      <span id="sticker-hint" class="muted"></span>
+    </div>
+    <div id="sticker-grid" class="sticker-grid"></div>
+    <div id="sticker-empty" class="empty" hidden>
+      这里还没有表情包。<br>
+      把 <code>.png</code> 放进 <code id="sticker-dir">web/stickers</code>，重启服务即可。
+    </div>
+  </div>
+
+  <div class="input-row">
+    <button id="btn-stickers" class="icon" title="表情包（Ctrl+E）" aria-label="表情包">☺</button>
+    <textarea id="input" rows="1" placeholder="说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="btn-send" class="send">发送</button>
+  </div>
+</footer>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

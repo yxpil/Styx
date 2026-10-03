@@ -231,8 +231,9 @@ impl Guard {
             }
         }
 
-        // 3) 完全没有台词
-        if reply.speech.is_empty() {
+        // 3) 完全没有可看的东西：发一张表情包或一张图片而不说话都是**合法表达**，
+        //    真正要拦的是"既没有说话、也没有图"的空回合
+        if reply.speech.is_empty() && reply.stickers.is_empty() && reply.images.is_empty() {
             audit
                 .violations
                 .push("缺少 [说] 台词，请至少给出一句对话。".to_string());
@@ -401,6 +402,14 @@ mod tests {
         let audit = Guard::audit(&card(), &r);
         assert!(audit.needs_retry());
         assert!(audit.violations[0].contains("缺少"));
+    }
+
+    #[test]
+    fn a_sticker_reply_is_a_valid_way_to_answer() {
+        // 有些时刻一张图就够了。Guard 不该逼角色为表情包配一句台词。
+        let r = Reply::parse("[表情] happy_01").unwrap();
+        let audit = Guard::audit(&card(), &r);
+        assert!(!audit.needs_retry(), "{:?}", audit.violations);
     }
 
     #[test]

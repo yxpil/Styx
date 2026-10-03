@@ -240,11 +240,37 @@ pub trait PoolPort: Send + Sync {
 }
 
 /// 对话消息（OpenAI 风格）。
+///
+/// ## 为什么图片是**并列的一个字段**，而不是把 `content` 换成枚举
+///
+/// OpenAI 的多模态格式把 `content` 变成一个分段数组：
+///
+/// ```json
+/// {"role":"user","content":[
+///   {"type":"text","text":"看看这个"},
+///   {"type":"image_url","image_url":{"url":"data:image/jpeg;base64,..."}}
+/// ]}
+/// ```
+///
+/// 但把 `content` 改成 `enum { Text(String), Parts(Vec<Part>) }` 会波及每一个
+/// 用到它的地方——记忆库、联想服务、混合池上游收发的都是纯字符串，它们根本
+/// 不关心图。所以这里改成**加一个可选的 `images`**：
+///
+/// - `content` 保持 `String`，所有既有调用点一个字都不用改；
+/// - `images` 是 `data:` URL 或 http(s) URL 的列表，空的时候序列化器会**整个
+///   省掉它**，于是纯文本请求发出的 JSON 和从前逐字节相同；
+/// - 只有真的要带图时，序列化层才把这一条消息展开成分段数组。
+///
+/// 这个形状也让"降级"变得自然：模型端点不支持图片时，把 `images` 丢掉、
+/// 只发文本，回合照常进行——而那段文本里已经有本地视觉分析写好的描述。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// `system` / `user` / `assistant`。
     pub role: String,
     pub content: String,
+    /// 随消息一起发的图（`data:` URL 或 http(s) URL）。空 = 纯文本消息。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 impl ChatMessage {
@@ -252,6 +278,7 @@ impl ChatMessage {
         ChatMessage {
             role: "system".into(),
             content: content.into(),
+            images: Vec::new(),
         }
     }
 
@@ -259,6 +286,7 @@ impl ChatMessage {
         ChatMessage {
             role: "user".into(),
             content: content.into(),
+            images: Vec::new(),
         }
     }
 
@@ -266,7 +294,28 @@ impl ChatMessage {
         ChatMessage {
             role: "assistant".into(),
             content: content.into(),
+            images: Vec::new(),
         }
+    }
+
+    /// 给这条消息挂一张图（`data:` URL 或 http(s) URL）。
+    pub fn with_image(mut self, url: impl Into<String>) -> Self {
+        self.images.push(url.into());
+        self
+    }
+
+    /// 给这条消息挂多张图。
+    pub fn with_images<I, S>(mut self, urls: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.images.extend(urls.into_iter().map(Into::into));
+        self
+    }
+
+    pub fn has_images(&self) -> bool {
+        !self.images.is_empty()
     }
 }
 

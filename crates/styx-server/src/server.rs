@@ -23,7 +23,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use styx_core::error::{Result, StyxError};
 use styx_core::text::round3;
-use styx_core::{Kernel, Reply, Scene};
+use styx_core::{Kernel, Reply, Scene, TurnOutcome};
 
 use crate::protocol::{Request, Response};
 
@@ -111,15 +111,16 @@ impl Server {
 
     /// 绑定并返回监听器，便于先拿到端口号再决定何时开始接受连接。
     pub fn bind(&self, addr: &str) -> Result<TcpListener> {
-        TcpListener::bind(addr).map_err(|e| {
-            StyxError::Other(format!("无法监听 {addr}：{e}"))
-        })
+        TcpListener::bind(addr).map_err(|e| StyxError::Other(format!("无法监听 {addr}：{e}")))
     }
 
     /// 绑定并阻塞运行。
     pub fn bind_and_run(self: Arc<Self>, addr: &str) -> Result<()> {
         let listener = self.bind(addr)?;
-        let actual = listener.local_addr().map(|a| a.to_string()).unwrap_or_default();
+        let actual = listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
         println!("Styx 服务已启动：{actual}");
         println!("会话工厂：{}", self.factory.describe());
         self.run(listener)
@@ -145,9 +146,7 @@ impl Server {
 
     /// 处理一条连接。
     pub fn handle_connection(&self, stream: TcpStream) -> Result<()> {
-        stream
-            .set_read_timeout(Some(Duration::from_secs(600)))
-            .ok();
+        stream.set_read_timeout(Some(Duration::from_secs(600))).ok();
         stream.set_nodelay(true).ok();
         let reader = BufReader::new(
             stream
@@ -203,11 +202,7 @@ impl Server {
         }
     }
 
-    fn try_dispatch(
-        &self,
-        state: &mut ConnectionState,
-        req: Request,
-    ) -> Result<(Response, bool)> {
+    fn try_dispatch(&self, state: &mut ConnectionState, req: Request) -> Result<(Response, bool)> {
         match req {
             Request::Ping => Ok((
                 Response::ok("ping", json!({"pong": true, "service": "styx"})),
@@ -251,9 +246,9 @@ impl Server {
                             "transcript": transcript,
                             "factory": self.factory.describe(),
                             "ops": [
-                                "ping","hello","say","state","scene","set_scene",
-                                "events","tools","call","status","remember",
-                                "recall","associate","reset","quit"
+                                "ping","hello","say","sticker","stickers","state",
+                                "scene","set_scene","events","tools","call","status",
+                                "remember","recall","associate","reset","quit"
                             ],
                         }),
                     ),
@@ -265,55 +260,42 @@ impl Server {
                 let name = self.ensure_session(state)?;
                 let outcome = self.with_kernel(&name, |k| k.turn(&text))?;
                 self.turns.fetch_add(1, Ordering::Relaxed);
-                let (state_json, scene_json) = self
-                    .with_kernel(&name, |k| {
-                        Ok((
-                            serde_json::to_value(k.state()).unwrap_or(Value::Null),
-                            serde_json::to_value(k.scene()).unwrap_or(Value::Null),
-                        ))
-                    })
-                    .unwrap_or((Value::Null, Value::Null));
+                Ok((self.turn_response(&name, "say", &outcome), false))
+            }
 
-                Ok((
-                    Response::ok(
-                        "say",
-                        json!({
-                            "session": name,
-                            "turn": outcome.turn,
-                            "reply": reply_json(&outcome.reply),
-                            "plain": outcome.reply.plain_text(),
-                            "state_delta": outcome.reply.state_delta.render(),
-                            "scene": scene_json,
-                            "state": state_json,
-                            "audit": {
-                                "violations": outcome.audit.violations,
-                                "warnings": outcome.audit.warnings,
-                            },
-                            "retries": outcome.retries,
-                            "recalled": outcome.recalled.iter().map(|r| json!({
-                                "id": r.id, "text": r.text, "score": round3(r.score),
-                                "importance": round3(r.importance), "origin": r.origin,
-                            })).collect::<Vec<_>>(),
-                            "associations": outcome.associations.iter().map(|a| json!({
-                                "word": a.word, "score": round3(a.score),
-                                "confidence": round3(a.confidence),
-                                "evidence": a.evidence,
-                            })).collect::<Vec<_>>(),
-                            "memory_written": outcome.memory_written,
-                            "pool_written": outcome.pool_written,
-                            "scene_changed": outcome.scene_changed,
-                            "prompt": outcome.report.render(),
-                            "usage": {
-                                "prompt_tokens": outcome.completion.prompt_tokens,
-                                "completion_tokens": outcome.completion.completion_tokens,
-                                "model": outcome.completion.model,
-                                "endpoint": outcome.completion.endpoint,
-                            },
-                            "notices": outcome.notices,
-                        }),
-                    ),
-                    false,
-                ))
+            Request::Sticker { id } => {
+                let name = self.ensure_session(state)?;
+                let outcome = self.with_kernel(&name, |k| k.send_sticker(&id))?;
+                self.turns.fetch_add(1, Ordering::Relaxed);
+                Ok((self.turn_response(&name, "sticker", &outcome), false))
+            }
+
+            Request::Stickers => {
+                let name = self.ensure_session(state)?;
+                let v = self.with_kernel(&name, |k| {
+                    let list = k
+                        .stickers()
+                        .map(|c| {
+                            c.all()
+                                .iter()
+                                .map(|s| {
+                                    json!({
+                                        "id": s.id,
+                                        "file": s.file,
+                                        "emotion": s.emotion,
+                                        "label": s.label,
+                                        "description": s.description,
+                                        "tags": s.tags,
+                                        "valence": round3(s.valence),
+                                        "arousal": round3(s.arousal),
+                                    })
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    Ok(json!({"count": list.len(), "stickers": list}))
+                })?;
+                Ok((Response::ok("stickers", v), false))
             }
 
             Request::State => {
@@ -380,6 +362,9 @@ impl Server {
                             "text": e.text,
                             "importance": e.importance,
                             "line": e.render_line(),
+                            // meta 必须带出去：表情包事件靠 `sticker_id`
+                            // 才能被前端渲染成一张图而不是一句转述。
+                            "meta": e.meta,
                         })).collect::<Vec<_>>(),
                     }))
                 })?;
@@ -419,13 +404,11 @@ impl Server {
                         .ok_or_else(|| StyxError::UnknownTool(tool.clone()))?;
                     let args_log = args.to_string();
                     let out = tools.invoke(&tool, args.clone())?;
-                    let seq = k
-                        .session_mut()
-                        .push(
-                            styx_core::EventKind::ToolCall,
-                            tool.clone(),
-                            args_log,
-                        );
+                    let seq = k.session_mut().push(
+                        styx_core::EventKind::ToolCall,
+                        tool.clone(),
+                        args_log,
+                    );
                     k.session_mut().push(
                         styx_core::EventKind::ToolResult,
                         tool.clone(),
@@ -575,6 +558,63 @@ impl Server {
         }
         out
     }
+
+    /// 把一个回合的结果整理成响应。
+    ///
+    /// `say` 与 `sticker` 共用它：两者进入的是**同一个回合闭环**，
+    /// 响应形状就必须一致——否则前端要为每种输入写一套渲染分支，
+    /// 而它们本来渲染的就是同一种东西。
+    fn turn_response(&self, name: &str, op: &str, outcome: &TurnOutcome) -> Response {
+        let (state_json, scene_json) = self
+            .with_kernel(name, |k| {
+                Ok((
+                    serde_json::to_value(k.state()).unwrap_or(Value::Null),
+                    serde_json::to_value(k.scene()).unwrap_or(Value::Null),
+                ))
+            })
+            .unwrap_or((Value::Null, Value::Null));
+
+        Response::ok(
+            op,
+            json!({
+                "session": name,
+                "turn": outcome.turn,
+                "reply": reply_json(&outcome.reply),
+                "plain": outcome.reply.plain_text(),
+                "state_delta": outcome.reply.state_delta.render(),
+                "scene": scene_json,
+                "state": state_json,
+                "audit": {
+                    "violations": outcome.audit.violations,
+                    "warnings": outcome.audit.warnings,
+                },
+                "retries": outcome.retries,
+                "recalled": outcome.recalled.iter().map(|r| json!({
+                    "id": r.id, "text": r.text, "score": round3(r.score),
+                    "importance": round3(r.importance), "origin": r.origin,
+                })).collect::<Vec<_>>(),
+                "associations": outcome.associations.iter().map(|a| json!({
+                    "word": a.word, "score": round3(a.score),
+                    "confidence": round3(a.confidence),
+                    "evidence": a.evidence,
+                })).collect::<Vec<_>>(),
+                "pool_notes": outcome.pool_notes.iter().map(|r| json!({
+                    "id": r.id, "text": r.text, "score": round3(r.score), "origin": r.origin,
+                })).collect::<Vec<_>>(),
+                "memory_written": outcome.memory_written,
+                "pool_written": outcome.pool_written,
+                "scene_changed": outcome.scene_changed,
+                "prompt": outcome.report.render(),
+                "usage": {
+                    "prompt_tokens": outcome.completion.prompt_tokens,
+                    "completion_tokens": outcome.completion.completion_tokens,
+                    "model": outcome.completion.model,
+                    "endpoint": outcome.completion.endpoint,
+                },
+                "notices": outcome.notices,
+            }),
+        )
+    }
 }
 
 /// 回复 → JSON。
@@ -583,11 +623,21 @@ pub fn reply_json(reply: &Reply) -> Value {
         "speech": reply.speech,
         "actions": reply.actions,
         "thoughts": reply.thoughts,
+        "stickers": reply.stickers,
         "memories": reply.memories.iter().map(|m| json!({
             // 浮点走线前统一收敛到 3 位小数，否则 0.8 会变成 0.800000011920929
             "text": m.text, "tags": m.tags, "importance": round3(m.importance),
         })).collect::<Vec<_>>(),
         "from_json": reply.from_json,
+        // 素材通道。之前这里漏了 images：core 明明解析出了 `[图片]` 请求，
+        // 走线时却被丢掉，前端永远收不到——通道"实现了但接不通"。
+        "images": reply.images.iter().map(|i| json!({
+            "key": i.key, "caption": i.caption,
+        })).collect::<Vec<_>>(),
+        // 模型原文。REPL 里有 `/raw`，前端却没有等价物——于是"这句话为什么
+        // 落到了台词而不是动作"在前端根本无从排查：结构化字段只告诉你
+        // 落到了哪里，原文才告诉你模型到底写了什么。
+        "raw": reply.raw,
     })
 }
 
@@ -637,6 +687,37 @@ mod tests {
         Arc::new(Server::new(Arc::new(|s: &str| offline_kernel(s))))
     }
 
+    /// 带表情包目录的离线内核。
+    fn offline_kernel_with_stickers(session: &str) -> Result<Kernel> {
+        use styx_assoc::InMemoryAssoc;
+        use styx_core::{CharacterCard, KernelConfig, Scene, StickerCatalog};
+        use styx_memory::InMemoryMemory;
+
+        let _ = session;
+        let mut card = CharacterCard::new("林夏");
+        card.persona = "外冷内热的旧书店主".into();
+        card.speech_style = "短句".into();
+        card.boundaries = vec!["绝不承认自己害怕孤独".into()];
+
+        Kernel::builder(card, Scene::new("拾光旧书店"))
+            .llm(styx_llm::offline_llm())
+            .memory(Arc::new(InMemoryMemory::new()))
+            .assoc(Arc::new(InMemoryAssoc::new()))
+            .stickers(Arc::new(StickerCatalog::from_files(&[
+                "happy_01.png",
+                "cry_03.png",
+                "wailing_22.png",
+            ])))
+            .config(KernelConfig::default())
+            .build()
+    }
+
+    fn sticker_server() -> Arc<Server> {
+        Arc::new(Server::new(Arc::new(|s: &str| {
+            offline_kernel_with_stickers(s)
+        })))
+    }
+
     fn call(server: &Server, state: &mut ConnectionState, line: &str) -> Value {
         let req = Request::parse(line).expect("请求应当可解析");
         let (resp, _close) = server.dispatch(state, req);
@@ -657,6 +738,8 @@ mod tests {
         assert_eq!(v["card"], "林夏");
         assert_eq!(v["resumed"], false);
         assert!(v["ops"].as_array().unwrap().contains(&json!("say")));
+        assert!(v["ops"].as_array().unwrap().contains(&json!("sticker")));
+        assert!(v["ops"].as_array().unwrap().contains(&json!("stickers")));
         assert_eq!(st.session.as_deref(), Some("default"));
 
         // 再握一次应当是"恢复"而不是新建
@@ -685,11 +768,7 @@ mod tests {
         let s = server();
         let mut st = ConnectionState::default();
         call(&s, &mut st, r#"{"op":"hello"}"#);
-        let v = call(
-            &s,
-            &mut st,
-            r#"{"op":"say","text":"我想看看那本旧相册"}"#,
-        );
+        let v = call(&s, &mut st, r#"{"op":"say","text":"我想看看那本旧相册"}"#);
         assert_eq!(v["ok"], true);
         assert_eq!(v["turn"], 1);
         assert!(!v["reply"]["speech"].as_array().unwrap().is_empty());
@@ -709,7 +788,11 @@ mod tests {
         let mut st = ConnectionState::default();
         call(&s, &mut st, r#"{"op":"hello"}"#);
 
-        let v = call(&s, &mut st, r#"{"op":"set_scene","scene":{"location":"后院","time":"清晨"}}"#);
+        let v = call(
+            &s,
+            &mut st,
+            r#"{"op":"set_scene","scene":{"location":"后院","time":"清晨"}}"#,
+        );
         assert_eq!(v["location"], "后院");
         assert_eq!(v["time"], "清晨");
 
@@ -890,11 +973,88 @@ mod tests {
 
     #[test]
     fn reply_json_shape() {
-        let r = Reply::parse("[做] 合上书\n[说] 不卖。\n[忆] 某件事 | 标签=a | 重要度=0.8").unwrap();
+        let r =
+            Reply::parse("[做] 合上书\n[说] 不卖。\n[忆] 某件事 | 标签=a | 重要度=0.8").unwrap();
         let v = reply_json(&r);
         assert_eq!(v["speech"][0], "不卖。");
         assert_eq!(v["actions"][0], "合上书");
         assert_eq!(v["memories"][0]["importance"], 0.8);
         assert_eq!(v["from_json"], false);
+        // 没有表情包时也要有 stickers 字段：前端可以无条件读它
+        assert_eq!(v["stickers"].as_array().unwrap().len(), 0);
+        // 素材通道与原文同样必须无条件在场：前端可以无条件读，
+        // 不必先判断键存不存在（漏了 images 时前端会静默丢图）
+        assert!(v["images"].is_array());
+        assert!(v["raw"].is_string());
+    }
+
+    #[test]
+    fn reply_json_carries_both_media_channels_and_the_raw_text() {
+        let r = Reply::parse("[说] 你看。\n[表情] happy_01\n[图片] old_photo | 这张").unwrap();
+        let v = reply_json(&r);
+        assert_eq!(v["stickers"][0], "happy_01");
+        assert_eq!(v["images"][0]["key"], "old_photo");
+        assert_eq!(v["images"][0]["caption"], "这张");
+        // 原文要能原样拿到，前端才排得动"这句话为什么落错通道"
+        assert!(v["raw"].as_str().unwrap().contains("[表情] happy_01"));
+    }
+
+    // ------------------------------------------------------------ 表情包
+
+    #[test]
+    fn sticker_round_trip_over_the_protocol() {
+        let s = sticker_server();
+        let mut st = ConnectionState::default();
+        call(&s, &mut st, r#"{"op":"hello"}"#);
+
+        let v = call(&s, &mut st, r#"{"op":"stickers"}"#);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["count"], 3);
+        assert_eq!(v["stickers"][0]["file"], "happy_01.png");
+        assert_eq!(v["stickers"][0]["label"], "开心");
+        assert!(v["stickers"][0]["description"].as_str().unwrap().len() > 4);
+
+        let v = call(&s, &mut st, r#"{"op":"sticker","id":"cry_03"}"#);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["turn"], 1);
+        assert!(!v["plain"].as_str().unwrap().is_empty());
+        assert!(v["state"]["mood"].is_object());
+
+        // 对方发来的表情包要作为一条用户输入进事件流，端口才还原得出气泡
+        let v = call(&s, &mut st, r#"{"op":"events","limit":50}"#);
+        let events = v["events"].as_array().unwrap();
+        assert!(
+            events.iter().any(|e| e["kind"] == "user_input"),
+            "{events:?}"
+        );
+        assert_eq!(s.turns(), 1);
+    }
+
+    #[test]
+    fn stickers_op_is_empty_without_a_catalog() {
+        let s = server();
+        let mut st = ConnectionState::default();
+        call(&s, &mut st, r#"{"op":"hello"}"#);
+        let v = call(&s, &mut st, r#"{"op":"stickers"}"#);
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["count"], 0);
+        assert!(v["stickers"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_sticker_the_catalog_does_not_have_is_an_error_not_a_crash() {
+        let s = sticker_server();
+        let mut st = ConnectionState::default();
+        call(&s, &mut st, r#"{"op":"hello"}"#);
+        let v = call(&s, &mut st, r#"{"op":"sticker","id":"nope_99"}"#);
+        assert_eq!(v["ok"], false);
+        assert!(
+            v["error"].as_str().unwrap().contains("没有这张表情包"),
+            "{v:?}"
+        );
+        assert_eq!(s.errors(), 1);
+        // 连接必须还能继续用
+        let v = call(&s, &mut st, r#"{"op":"ping"}"#);
+        assert_eq!(v["pong"], true);
     }
 }

@@ -96,6 +96,29 @@ Styx 采用**协议适配器优先**：把对方当作"服务 + 协议"，以原
 
 细节见 [INTEGRATION.md](INTEGRATION.md)。
 
+### 反过来：Styx 的一部分也会单独发布
+
+上面的表是「Styx 接入别人」。反方向也存在一处：[**styx-vision**](https://github.com/yxpil/styx-vision)
+——「让没有视觉能力的语言模型看懂一张图」这件事本身可以独立使用，
+不需要角色扮演内核。
+
+| | 地址 | 内容 |
+|---|---|---|
+| 主仓库（**事实来源**） | [yxpil/Styx](https://github.com/yxpil/Styx) | 全部内容：视觉 + 内核 + 语音 + 前端 |
+| 镜像 | [yxpil/styx-vision](https://github.com/yxpil/styx-vision) | 只有视觉：`crates/styx-vision` + `crates/styx-http` + `services/vision` |
+
+**本仓库永远包含全部内容**：裸克隆就是完整的、能编译的、不需要 `--recursive`。
+镜像由 `tools/sync_vision_repo.py` 物化出来，它会自动算依赖闭包、生成独立的
+根 `Cargo.toml`，所以将来给视觉加内部依赖时镜像不会静默编译失败。
+
+```bash
+python tools/sync_vision_repo.py --target ../styx-vision          # 同步
+python tools/sync_vision_repo.py --target ../styx-vision --check  # 只校验漂移
+```
+
+镜像里的代码不要直接改（下次同步会覆盖），要改就改这里。取舍的理由见
+[`tools/README.md`](tools/README.md)。
+
 ---
 
 ## 架构
@@ -120,6 +143,8 @@ Styx 采用**协议适配器优先**：把对方当作"服务 + 协议"，以原
    styx-http（极小 HTTP 客户端：std 明文 / ureq+TLS）
 
    外层：styx-server（TCP JSON-lines 多会话服务） · styx-cli（bin `styx`）
+         styx-web（黑白简约前端 + 文本约定协议）
+         styx-vision（本地图像理解：零依赖事实 + 可选 ONNX 检测/反推）
 ```
 
 一个回合发生了什么（`styx-core::kernel::Kernel::turn`）：

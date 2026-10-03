@@ -1,7 +1,17 @@
+# 统一换行符，避免跨平台协作时的无意义 diff
 * text=auto eol=lf
 
+# 二进制文件不做换行转换
 *.png binary
 *.jpg binary
+*.jpeg binary
 *.ico binary
 *.exe binary
 *.ndb binary
+
+# JPEG 解码器的逐像素参考数据（PIL 解出的原始 RGB）。
+# 必须显式标成 binary：`text=auto` 是靠内容里有没有 NUL 字节来猜的，
+# 而这批文件里 NUL 只是"某个像素恰好是 0"的副产品。一张恰好不含 0x00 的
+# 夹具就会被当成文本，签出时 CR 被 LF 吃掉，于是「逐像素比对」开始
+# 报一个看起来像解码器 bug 的误差。显式声明比碰运气便宜得多。
+*.raw binary

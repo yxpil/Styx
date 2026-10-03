@@ -13,7 +13,15 @@ default = ["tls"]
 tls = ["dep:ureq"]
 
 [dependencies]
-styx-core.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-ureq = { version = "2", default-features = false, features = ["tls", "webpki-roots"], optional = true }
+
+# 版本下限卡在 2.12：更早的 2.x 拉的是 rustls 0.21 → rustls-webpki 0.101.x，
+# 那一条线上有三个已知漏洞（含一个 high：畸形 CRL 触发 panic 的 DoS）。
+# 2.12 用 rustls 0.23 → rustls-webpki 0.103.x，修补版本就在这条线上。
+#
+# **不要**在 features 里加 `webpki-roots`。它在 ureq 2.8 是个独立 feature，
+# 但从 2.9 起被折进了 `tls`（`tls = ["dep:webpki-roots", "dep:rustls", ...]`），
+# 于是再写一遍就成了一个不存在的 feature——cargo 的报错是"解析不出 ureq 的
+# 版本"，看起来像版本冲突，实际是**悄悄退回 2.8.0**，把上面那个漏洞带了回来。
+ureq = { version = "2.12", default-features = false, features = ["tls"], optional = true }

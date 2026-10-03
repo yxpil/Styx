@@ -1,0 +1,17 @@
+{
+  "file": "flat_white.jpg",
+  "raw": "flat_white.raw",
+  "width": 24,
+  "height": 16,
+  "jpeg_size": 635,
+  "mean_luma": 1.0,
+  "mean_rgb": [
+    255.0,
+    255.0,
+    255.0
+  ],
+  "options": {
+    "quality": 95
+  },
+  "mode": "RGB"
+}

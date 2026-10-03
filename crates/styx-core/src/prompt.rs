@@ -8,7 +8,12 @@
 //! 并且把裁剪结果写进 [`PromptReport`] 供观测。
 //!
 //! 段的优先级（从高到低）：
-//! `角色卡 > 场景 > 当下状态 > 对话历史 > 长期记忆 > 联想 > 共享记忆`
+//! `角色卡 > 场景 > 当下状态 > 表情包清单 > 图片素材清单 > 对话历史 > 长期记忆 > 联想 > 共享记忆`
+//!
+//! 表情包与图片清单之所以归在"高优先级固定段"：它们是**能力说明**，
+//! 被裁掉的后果是角色忽然"不会发表情 / 不会发图了"，而不是少一点素材。
+//! 但它们各有独立的条数上限（见 [`PromptBuilder::sticker_cap`] 与
+//! [`PromptBuilder::media_cap`]），几百张图也不至于把预算吃光。
 //!
 //! 历史不足预算时会把剩余额度**让给记忆**，反之亦然——这是唯一一处"动态借额"，
 //! 因为它显著改善了长会话的体验。
@@ -17,11 +22,13 @@ use std::collections::BTreeMap;
 
 use crate::character::CharacterCard;
 use crate::event::{Event, EventKind};
+use crate::media::MediaLibrary;
 use crate::ports::{Association, ChatMessage, Recalled};
 use crate::reply::Reply;
 use crate::scene::Scene;
 use crate::state::DynamicState;
-use crate::text::{estimate_tokens, summarize, truncate_to_tokens};
+use crate::sticker::StickerCatalog;
+use crate::text::{estimate_tokens, summarize, truncate_to_tokens, IMAGE_TOKEN_COST};
 
 /// 提示词预算（单位：估算 token）。
 #[derive(Debug, Clone)]
@@ -109,6 +116,10 @@ pub struct PromptReport {
     pub history_events: usize,
     /// 命中的世界书条目数。
     pub lore_hits: usize,
+    /// 提供给模型选择的表情包数量（0 表示没有表情包或未启用）。
+    pub sticker_options: usize,
+    /// 提供给模型选择的图片素材数量（0 表示没有素材或未启用）。
+    pub media_options: usize,
     /// 降级 / 告警（例如"记忆后端不可用"）。
     pub notices: Vec<String>,
     /// 是否真的超了总预算（正常情况下不会）。
@@ -132,6 +143,12 @@ impl PromptReport {
         if self.lore_hits > 0 {
             parts.push(format!("世界书 {}条", self.lore_hits));
         }
+        if self.sticker_options > 0 {
+            parts.push(format!("表情 {}张", self.sticker_options));
+        }
+        if self.media_options > 0 {
+            parts.push(format!("图片 {}张", self.media_options));
+        }
         let mut s = parts.join(" · ");
         if !self.notices.is_empty() {
             s.push_str("  ⚠ ");
@@ -139,6 +156,28 @@ impl PromptReport {
         }
         s
     }
+}
+
+/// 估算一组消息的 token 开销（文本 + 图片 + 每条消息的固定开销）。
+///
+/// 单独抽成函数是为了能直接测。图片那一行特别容易被顺手删掉，而且删掉之后
+/// **毫无症状**：预算表少算几千 token，直到某次请求被端点拒绝、或者真正重要的
+/// 历史被莫名挤掉，才会有人回来找原因。
+///
+/// 两件事值得说明：
+///
+/// - 图片按**张数**折算（[`IMAGE_TOKEN_COST`]），不按 base64 的字符数算。
+///   按字符算的话，一张 200 KB 的图会被估成几万 token，预算直接爆掉，
+///   而那明显不对——端点是把图解码成视觉特征，不是把 base64 当文本读。
+/// - 每条消息加 4 个 token 的固定开销（`role` 字段和分隔符），
+///   一轮几十条消息下来这笔开销不算小。
+pub fn estimate_messages_tokens(messages: &[ChatMessage]) -> usize {
+    let mut total = 0usize;
+    for m in messages {
+        total += estimate_tokens(&m.content);
+        total += m.images.len() * IMAGE_TOKEN_COST;
+    }
+    total + messages.len() * 4
 }
 
 /// 提示词装配器。
@@ -153,6 +192,14 @@ pub struct PromptBuilder<'a> {
     pub user_role: &'a str,
     /// 本轮用户输入。
     pub user_input: &'a str,
+    /// 角色可用的表情包目录（`None` = 这个角色不会发表情）。
+    pub stickers: Option<&'a StickerCatalog>,
+    /// 表情包清单最多列几张（防止几百张图把预算吃光）。
+    pub sticker_cap: usize,
+    /// 角色可发的图片素材库（`None` = 这个角色没有图可发）。
+    pub media: Option<&'a MediaLibrary>,
+    /// 图片清单最多列几张。
+    pub media_cap: usize,
 }
 
 impl<'a> PromptBuilder<'a> {
@@ -207,7 +254,34 @@ impl<'a> PromptBuilder<'a> {
             .insert("state".into(), estimate_tokens(&state_block));
         system.push_str(&state_block);
 
-        // ---- 6. 长期记忆（可裁剪）----
+        // ---- 6. 表情包清单（固定：这是"能力"，裁了就变成不会用表情）----
+        if let Some(cat) = self.stickers {
+            let block = cat.prompt_block(self.sticker_cap);
+            if !block.is_empty() {
+                report.sticker_options = cat.len();
+                report
+                    .sections
+                    .insert("stickers".into(), estimate_tokens(&block));
+                system.push_str(&block);
+            }
+        }
+
+        // ---- 6.5 图片素材清单（固定，理由同上）----
+        // 与表情包分开一段而不是合成"素材"：模型对"我现在什么心情"和
+        // "我手上有什么东西可以给他看"是两种完全不同的决策。
+        if let Some(lib) = self.media {
+            let catalog = lib.render_catalog(self.media_cap);
+            if !catalog.is_empty() {
+                let block = format!("\n## 我能给他看的图片\n{catalog}\n");
+                report.media_options = lib.len();
+                report
+                    .sections
+                    .insert("media".into(), estimate_tokens(&block));
+                system.push_str(&block);
+            }
+        }
+
+        // ---- 7. 长期记忆（可裁剪）----
         let (mem_block, used, dropped) = self.memory_block(memories);
         report.memories_used = used;
         report.memories_dropped = dropped;
@@ -218,7 +292,7 @@ impl<'a> PromptBuilder<'a> {
             system.push_str(&mem_block);
         }
 
-        // ---- 7. 联想（可裁剪）----
+        // ---- 8. 联想（可裁剪）----
         let (assoc_block, assoc_used) = self.assoc_block(associations);
         report.associations_used = assoc_used;
         if !assoc_block.is_empty() {
@@ -228,7 +302,7 @@ impl<'a> PromptBuilder<'a> {
             system.push_str(&assoc_block);
         }
 
-        // ---- 8. 共享记忆（可裁剪）----
+        // ---- 9. 共享记忆（可裁剪）----
         let (pool_block, pool_used) = self.pool_block(pool);
         report.pool_used = pool_used;
         if !pool_block.is_empty() {
@@ -238,7 +312,7 @@ impl<'a> PromptBuilder<'a> {
             system.push_str(&pool_block);
         }
 
-        // ---- 9. 提醒（一致性守护）----
+        // ---- 10. 提醒（一致性守护）----
         if !notices.is_empty() {
             let mut n = String::from("\n## 必须遵守\n");
             for x in notices {
@@ -250,8 +324,15 @@ impl<'a> PromptBuilder<'a> {
             system.push_str(&n);
         }
 
-        // ---- 10. 输出格式（固定）----
-        let fmt = format!("\n## 输出格式\n{}\n", Reply::format_instructions());
+        // ---- 11. 输出格式（固定）----
+        // 表情包那一行只在真的给了目录时才出现——不能凭空告诉模型
+        // "你可以发图"，否则它会开始编造编号。
+        let fmt = format!(
+            "\n## 输出格式\n{}{}{}\n",
+            Reply::format_instructions(),
+            self.stickers.map(|c| c.format_hint()).unwrap_or_default(),
+            self.media.map(|m| m.format_hint()).unwrap_or_default()
+        );
         report.sections.insert("format".into(), estimate_tokens(&fmt));
         system.push_str(&fmt);
 
@@ -285,12 +366,7 @@ impl<'a> PromptBuilder<'a> {
         messages.push(ChatMessage::user(self.user_input.to_string()));
 
         // ---- 汇总 ----
-        let mut total = 0usize;
-        for m in &messages {
-            total += estimate_tokens(&m.content);
-        }
-        // 每条消息的固定开销（role/分隔符）
-        total += messages.len() * 4;
+        let total = estimate_messages_tokens(&messages);
         report.estimated_tokens = total;
         report.over_budget = total > self.budget.total;
 
@@ -552,6 +628,38 @@ mod tests {
     use crate::event::EventKind;
     use crate::state::DynamicState;
 
+    /// 图片折算进预算的那部分很容易在重构时被顺手删掉，而且删掉之后**毫无症状**：
+    /// 预算表少算几千 token，一直到某次请求被端点拒绝（或历史被莫名挤掉）才发现。
+    /// 所以单独把它抽成函数，就是为了能这样直接测。
+    #[test]
+    fn image_cost_is_counted_into_the_prompt_budget() {
+        let text_only = vec![ChatMessage::user("看看这张图")];
+        let with_one = vec![ChatMessage::user("看看这张图").with_image("data:image/png;base64,AAAA")];
+        let with_three = vec![ChatMessage::user("看看这张图").with_images([
+            "data:image/png;base64,A",
+            "data:image/png;base64,B",
+            "data:image/png;base64,C",
+        ])];
+
+        let a = estimate_messages_tokens(&text_only);
+        let b = estimate_messages_tokens(&with_one);
+        let c = estimate_messages_tokens(&with_three);
+
+        assert_eq!(b - a, IMAGE_TOKEN_COST, "一张图正好折算 IMAGE_TOKEN_COST");
+        assert_eq!(c - a, 3 * IMAGE_TOKEN_COST, "三张图按张数线性累加");
+        // base64 的长度**不该**影响结果：端点会解码，不会按字符数计 token。
+        // 否则一张 200KB 的图会被算成几万 token，把历史全挤光。
+        let huge = vec![ChatMessage::user("x")
+            .with_image("data:image/png;base64,".to_string() + &"A".repeat(200_000))];
+        assert_eq!(
+            estimate_messages_tokens(&huge),
+            estimate_messages_tokens(&text_only) - estimate_tokens("看看这张图")
+                + estimate_tokens("x")
+                + IMAGE_TOKEN_COST,
+            "图片的 token 只按张数算，不按 base64 字符数算"
+        );
+    }
+
     fn card() -> CharacterCard {
         CharacterCard::parse_markdown(
             r#"
@@ -611,6 +719,10 @@ mod tests {
             history: &hist,
             user_role: "陈默",
             user_input: input,
+            stickers: None,
+            sticker_cap: 0,
+            media: None,
+            media_cap: 0,
         };
         builder.build(memories, assoc, &[], &[])
     }
@@ -707,6 +819,10 @@ mod tests {
             history: &hist,
             user_role: "陈默",
             user_input: "继续",
+            stickers: None,
+            sticker_cap: 0,
+            media: None,
+            media_cap: 0,
         };
         let plan = builder.build(&[], &[], &[], &[]);
         assert!(plan.report.history_events < 60);
@@ -747,6 +863,10 @@ mod tests {
             history: &hist,
             user_role: "陈默",
             user_input: "hi",
+            stickers: None,
+            sticker_cap: 0,
+            media: None,
+            media_cap: 0,
         };
         let notices = vec!["长期记忆后端不可用，本回合没有记忆".to_string()];
         let plan = builder.build(&[], &[], &[], &notices);
@@ -770,6 +890,10 @@ mod tests {
             history: &hist,
             user_role: "陈默",
             user_input: "开门了吗",
+            stickers: None,
+            sticker_cap: 0,
+            media: None,
+            media_cap: 0,
         };
         let plan = builder.build(&[], &[], &[], &[]);
         assert_eq!(plan.messages.len(), 2);
@@ -792,5 +916,59 @@ mod tests {
         let plan = build(&PromptBudget::default(), "x", &mem, &[]);
         assert!(plan.report.memories_dropped > 0);
         assert!(plan.report.render().contains("丢弃"));
+    }
+
+    fn plan_with_stickers(cat: Option<&crate::sticker::StickerCatalog>, cap: usize) -> PromptPlan {
+        let card = card();
+        let scene = Scene::new("书店");
+        let state = DynamicState::default();
+        let hist: Vec<Event> = Vec::new();
+        let budget = PromptBudget::default();
+        let builder = PromptBuilder {
+            card: &card,
+            scene: &scene,
+            state: &state,
+            budget: &budget,
+            history: &hist,
+            user_role: "陈默",
+            user_input: "在吗",
+            stickers: cat,
+            sticker_cap: cap,
+            media: None,
+            media_cap: 0,
+        };
+        builder.build(&[], &[], &[], &[])
+    }
+
+    #[test]
+    fn sticker_catalog_enters_prompt_and_format_hint() {
+        let cat = crate::sticker::StickerCatalog::from_files(&["happy_01.png", "cry_03.png"]);
+        let plan = plan_with_stickers(Some(&cat), 10);
+
+        assert!(plan.system.contains("## 我有的表情包"));
+        assert!(plan.system.contains("- happy_01 开心"));
+        // 得给模型一个可以照抄的用法示例，否则它只会知道"有图"却不知道怎么写
+        assert!(plan.system.contains("[表情] happy_01"));
+        assert_eq!(plan.report.sticker_options, 2);
+        assert!(plan.report.render().contains("表情 2张"));
+    }
+
+    #[test]
+    fn without_a_catalog_the_prompt_says_nothing_about_stickers() {
+        // 没有表情包却提示"你可以发图"，模型会开始编造编号
+        let plan = plan_with_stickers(None, 10);
+        assert!(!plan.system.contains("表情包"));
+        assert!(!plan.system.contains("[表情]"));
+        assert_eq!(plan.report.sticker_options, 0);
+    }
+
+    #[test]
+    fn sticker_cap_limits_how_many_are_listed() {
+        let names: Vec<String> = (0..60).map(|i| format!("e_{:02}.png", i)).collect();
+        let cat = crate::sticker::StickerCatalog::from_files(&names);
+        let plan = plan_with_stickers(Some(&cat), 5);
+        assert!(plan.system.contains("还有 55 张未列出"));
+        // 报告里说的是"总共有多少张"，不是"列了几张"——那才是使用者关心的
+        assert_eq!(plan.report.sticker_options, 60);
     }
 }

@@ -1,0 +1,17 @@
+{
+  "file": "gray_q80.jpg",
+  "raw": "gray_q80.raw",
+  "width": 64,
+  "height": 48,
+  "jpeg_size": 531,
+  "mean_luma": 0.498214,
+  "mean_rgb": [
+    127.0446,
+    127.0446,
+    127.0446
+  ],
+  "options": {
+    "quality": 80
+  },
+  "mode": "L"
+}

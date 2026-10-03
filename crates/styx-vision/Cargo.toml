@@ -1,0 +1,19 @@
+[package]
+name = "styx-vision"
+description = "Styx: 本地图像理解 —— 手写 DEFLATE/PNG/BMP 解码与画面特征提取，让没有视觉能力的语言模型也能「看见」图"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# 启用可选的远程视觉后端（目标检测 sidecar / OpenAI 兼容视觉模型）。
+# 关掉它就是一个只依赖 serde 的纯本地实现。
+http = ["dep:styx-http"]
+
+[dependencies]
+styx-http = { workspace = true, optional = true }
+serde.workspace = true
+# 远程后端的响应解析（`parse_objects`）是公开 API，接收 &Value，所以不是 dev-only。
+serde_json.workspace = true

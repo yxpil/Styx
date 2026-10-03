@@ -1,0 +1,13 @@
+# Styx 视觉 sidecar 的运行时依赖。
+#
+# 这三个都是纯 wheel，pip 装完即用——**不拉 torch，不拉 torchvision**。
+# 目标检测与属性反推都由 onnxruntime 跑预导出的 .onnx，这也正是这条服务
+# 存在的意义：把「几百 MB 的 PyTorch 环境」换成「一个 12 MB 的解释器
+# 加两个 .onnx 文件」。
+#
+# 想连 Pillow 一起省掉的话，`fetch_models.py` 只用标准库，可以在任何
+# Python 里跑；`app.py` 和 `make_fixtures.py` 需要 Pillow 做图片解码。
+
+numpy>=1.24
+Pillow>=10.0
+onnxruntime>=1.16

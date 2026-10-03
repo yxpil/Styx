@@ -1,0 +1,17 @@
+{
+  "file": "flat_dark.jpg",
+  "raw": "flat_dark.raw",
+  "width": 24,
+  "height": 16,
+  "jpeg_size": 637,
+  "mean_luma": 0.091251,
+  "mean_rgb": [
+    19.0,
+    22.0,
+    41.0
+  ],
+  "options": {
+    "quality": 95
+  },
+  "mode": "RGB"
+}

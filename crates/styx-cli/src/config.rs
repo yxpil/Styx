@@ -25,6 +25,7 @@ pub struct Config {
     pub assoc: AssocSection,
     pub pool: PoolSection,
     pub tools: ToolsSection,
+    pub web: WebSection,
 }
 
 impl Config {
@@ -346,6 +347,36 @@ pub struct McpSpec {
     pub token: String,
 }
 
+// -------------------------------------------------------------------- 前端
+
+/// `styx web`：浏览器界面。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct WebSection {
+    /// 监听地址。默认只绑本机——这是个单人界面，不该默认暴露到局域网。
+    pub addr: String,
+    /// 表情包目录（`.png` / `.jpg` / `.gif` / `.webp`）。
+    pub stickers: PathBuf,
+    /// 默认会话名：同名刷新后能接着演。
+    pub session: String,
+    /// 启动后自动打开浏览器。
+    pub open: bool,
+    /// 打印每个请求（排查前端问题、观察回合耗时时打开）。
+    pub request_log: bool,
+}
+
+impl Default for WebSection {
+    fn default() -> Self {
+        WebSection {
+            addr: "127.0.0.1:8770".into(),
+            stickers: PathBuf::from("web/stickers"),
+            session: "web".into(),
+            open: false,
+            request_log: false,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +463,31 @@ mod tests {
         assert!(cfg.assoc.wants_graph_only());
         let cfg: Config = toml::from_str("[assoc]\nbackend = \"auto\"\n").unwrap();
         assert!(!cfg.assoc.wants_graph_only());
+    }
+
+    #[test]
+    fn web_section_defaults_to_localhost_and_no_auto_open() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert_eq!(cfg.web.addr, "127.0.0.1:8770");
+        assert!(!cfg.web.open, "不该默认抢走浏览器焦点");
+        assert!(!cfg.web.request_log);
+        assert_eq!(cfg.web.stickers, PathBuf::from("web/stickers"));
+    }
+
+    #[test]
+    fn web_section_only_overrides_what_it_says() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [web]
+            addr = "127.0.0.1:9000"
+            stickers = "/tmp/emoji"
+            open = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.web.addr, "127.0.0.1:9000");
+        assert_eq!(cfg.web.stickers, PathBuf::from("/tmp/emoji"));
+        assert!(cfg.web.open);
+        assert_eq!(cfg.web.session, "web", "没写的字段保持默认");
     }
 }

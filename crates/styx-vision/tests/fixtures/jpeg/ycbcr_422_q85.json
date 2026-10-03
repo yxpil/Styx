@@ -1,0 +1,18 @@
+{
+  "file": "ycbcr_422_q85.jpg",
+  "raw": "ycbcr_422_q85.raw",
+  "width": 64,
+  "height": 48,
+  "jpeg_size": 1444,
+  "mean_luma": 0.505721,
+  "mean_rgb": [
+    126.7445,
+    128.6719,
+    136.2454
+  ],
+  "options": {
+    "quality": 85,
+    "subsampling": 1
+  },
+  "mode": "RGB"
+}

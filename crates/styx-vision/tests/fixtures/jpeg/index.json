@@ -1,0 +1,182 @@
+{
+  "generated_by": "Pillow（libjpeg 封装），见 make_fixtures.py",
+  "cases": [
+    {
+      "file": "rgb_444_q92.jpg",
+      "raw": "rgb_444_q92.raw",
+      "width": 64,
+      "height": 48,
+      "jpeg_size": 1432,
+      "mean_luma": 0.498126,
+      "mean_rgb": [
+        127.0273,
+        127.016,
+        127.0407
+      ],
+      "options": {
+        "quality": 92,
+        "subsampling": 0
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "ycbcr_420_q75.jpg",
+      "raw": "ycbcr_420_q75.raw",
+      "width": 64,
+      "height": 48,
+      "jpeg_size": 903,
+      "mean_luma": 0.498203,
+      "mean_rgb": [
+        127.0423,
+        127.0417,
+        127.0417
+      ],
+      "options": {
+        "quality": 75,
+        "subsampling": 2
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "ycbcr_422_q85.jpg",
+      "raw": "ycbcr_422_q85.raw",
+      "width": 64,
+      "height": 48,
+      "jpeg_size": 1444,
+      "mean_luma": 0.505721,
+      "mean_rgb": [
+        126.7445,
+        128.6719,
+        136.2454
+      ],
+      "options": {
+        "quality": 85,
+        "subsampling": 1
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "gray_q80.jpg",
+      "raw": "gray_q80.raw",
+      "width": 64,
+      "height": 48,
+      "jpeg_size": 531,
+      "mean_luma": 0.498214,
+      "mean_rgb": [
+        127.0446,
+        127.0446,
+        127.0446
+      ],
+      "options": {
+        "quality": 80
+      },
+      "mode": "L"
+    },
+    {
+      "file": "tiny_8x8.jpg",
+      "raw": "tiny_8x8.raw",
+      "width": 8,
+      "height": 8,
+      "jpeg_size": 722,
+      "mean_luma": 0.555927,
+      "mean_rgb": [
+        129.4844,
+        145.7656,
+        153.3438
+      ],
+      "options": {
+        "quality": 90,
+        "subsampling": 0
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "odd_37x19.jpg",
+      "raw": "odd_37x19.raw",
+      "width": 37,
+      "height": 19,
+      "jpeg_size": 1054,
+      "mean_luma": 0.529136,
+      "mean_rgb": [
+        132.2518,
+        134.7539,
+        142.8592
+      ],
+      "options": {
+        "quality": 88,
+        "subsampling": 2
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "wide_321x9.jpg",
+      "raw": "wide_321x9.raw",
+      "width": 321,
+      "height": 9,
+      "jpeg_size": 1249,
+      "mean_luma": 0.498358,
+      "mean_rgb": [
+        126.8325,
+        127.343,
+        126.387
+      ],
+      "options": {
+        "quality": 80,
+        "subsampling": 2
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "flat_white.jpg",
+      "raw": "flat_white.raw",
+      "width": 24,
+      "height": 16,
+      "jpeg_size": 635,
+      "mean_luma": 1.0,
+      "mean_rgb": [
+        255.0,
+        255.0,
+        255.0
+      ],
+      "options": {
+        "quality": 95
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "flat_dark.jpg",
+      "raw": "flat_dark.raw",
+      "width": 24,
+      "height": 16,
+      "jpeg_size": 637,
+      "mean_luma": 0.091251,
+      "mean_rgb": [
+        19.0,
+        22.0,
+        41.0
+      ],
+      "options": {
+        "quality": 95
+      },
+      "mode": "RGB"
+    },
+    {
+      "file": "hires_q95.jpg",
+      "raw": "hires_q95.raw",
+      "width": 160,
+      "height": 120,
+      "jpeg_size": 4784,
+      "mean_luma": 0.498214,
+      "mean_rgb": [
+        127.0074,
+        127.0726,
+        126.998
+      ],
+      "options": {
+        "quality": 95,
+        "subsampling": 0
+      },
+      "mode": "RGB"
+    }
+  ]
+}

@@ -21,6 +21,7 @@ styx-assoc = { workspace = true }
 styx-pool = { workspace = true, features = ["http"] }
 styx-tools = { workspace = true, features = ["http"] }
 styx-server = { workspace = true }
+styx-web = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

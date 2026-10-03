@@ -45,28 +45,36 @@ pub mod character;
 pub mod error;
 pub mod event;
 pub mod kernel;
+pub mod media;
 pub mod ports;
 pub mod prompt;
+pub mod protocol;
 pub mod reply;
 pub mod scene;
 pub mod session;
 pub mod state;
+pub mod sticker;
 pub mod text;
+pub mod voice;
 
 pub use character::{CharacterCard, LoreEntry, Relation};
 pub use error::{Result, StyxError};
 pub use event::{Event, EventKind};
 pub use kernel::{Kernel, KernelConfig, KernelStatus, TurnOutcome};
+pub use media::{MediaLibrary, MediaSource, Photo};
 pub use ports::{
     AssocPort, Association, ChatMessage, Completion, LlmOptions, LlmPort, MemoryNote, MemoryPort,
     PoolPort, PoolStats, Recalled, ToolPort, ToolSpec,
 };
 pub use prompt::{PromptBudget, PromptBuilder, PromptPlan, PromptReport};
+pub use protocol::{Directive, DirectiveKind, DirectiveOutcome, ImageRequest};
 pub use reply::Reply;
 pub use scene::Scene;
 pub use session::{Audit, Guard, Session};
 pub use state::{DynamicState, Mood, StateDelta};
+pub use sticker::{Sticker, StickerCatalog};
 pub use text::{estimate_tokens, keywords, summarize, truncate_to_tokens};
+pub use voice::{SpeechRequest, SpeechSynthesizer, Transcript, Transcriber, VoiceInfo};
 
 /// 内核版本。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

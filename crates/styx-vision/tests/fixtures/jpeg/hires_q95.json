@@ -1,0 +1,18 @@
+{
+  "file": "hires_q95.jpg",
+  "raw": "hires_q95.raw",
+  "width": 160,
+  "height": 120,
+  "jpeg_size": 4784,
+  "mean_luma": 0.498214,
+  "mean_rgb": [
+    127.0074,
+    127.0726,
+    126.998
+  ],
+  "options": {
+    "quality": 95,
+    "subsampling": 0
+  },
+  "mode": "RGB"
+}

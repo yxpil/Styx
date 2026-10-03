@@ -14,12 +14,16 @@
 //! → {"op":"say","text":"我想看看那本旧相册。"}
 //! ← {"ok":true,"op":"say","turn":1,"reply":{"speech":["不卖。"],...},...}
 //!
+//! → {"op":"sticker","id":"cry_03"}     # 发一张表情包，同样推进一个回合
+//! ← {"ok":true,"op":"sticker","turn":2,"reply":{"stickers":["cry_03"],...},...}
+//!
 //! → {"op":"quit"}
 //! ← {"ok":true,"op":"quit","bye":true}
 //! ```
 //!
-//! 支持的 op：`ping` `hello` `say` `state` `scene` `set_scene` `events`
-//! `tools` `call` `status` `remember` `recall` `associate` `reset` `quit`。
+//! 支持的 op：`ping` `hello` `say` `sticker` `stickers` `state` `scene`
+//! `set_scene` `events` `tools` `call` `status` `remember` `recall`
+//! `associate` `reset` `quit`。
 //!
 //! 用 JSON-lines 而不是二进制帧，是为了能用 `nc` 直接调试——
 //! 调试角色行为时，"肉眼能不能看懂"比"字节效率"重要得多。

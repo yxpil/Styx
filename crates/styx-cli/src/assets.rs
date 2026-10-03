@@ -88,7 +88,8 @@ user_role = "常客"
 # 每回合召回的记忆条数。
 memory_recall = 8
 # 联想种子数 / 每个种子的联想条数。
-assoc_seeds = 3
+# 种子宁多勿漏：关键词抽取没有词典，精确率天然有限，多出来的种子只是多几次查询。
+assoc_seeds = 6
 assoc_limit = 6
 # 是否把事件写回长期记忆。
 write_memory = true
@@ -177,4 +178,19 @@ builtin = true
 # name  = "panoptes"
 # url   = "http://127.0.0.1:8760/mcp"
 # token = ""
+
+[web]
+# `styx web` —— 浏览器界面，带表情包面板。默认只监听本机。
+addr = "127.0.0.1:8770"
+# 表情包目录：把 .png / .jpg / .gif / .webp 放进去即可。
+# 文件名形如 `happy_01.png` 时，Styx 会从内置词典认出情绪（中文标签 + 画面描述
+# + 情绪效价），角色因此知道该在什么时候用哪一张；认不出来的名字也能用，
+# 只是提示词里的描述朴素一点。
+stickers = "web/stickers"
+# 默认会话名：同一个名字刷新浏览器后能接着演。
+session = "web"
+# 启动后自动打开浏览器。
+open = false
+# 打印每个请求（排查前端问题时打开）。
+request_log = false
 "#;

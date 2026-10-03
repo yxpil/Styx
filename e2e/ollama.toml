@@ -1,0 +1,60 @@
+# Styx × 本机 Ollama（phi4）——E2E 配置
+#
+# 用法（在 Styx/ 目录下执行，相对路径按 CWD 解析）：
+#   ./target/debug/styx --config ../live/styx_ollama.toml probe --deep
+#   ./target/debug/styx --config ../live/styx_ollama.toml say "你来了。"
+#   ./target/debug/styx --config ../live/styx_ollama.toml demo --turns 3
+#   ./target/debug/styx --config ../live/styx_ollama.toml web --open
+#
+# 为什么选 phi4 做 E2E：它是**纯 completion** 模型（capabilities 只有
+# completion，没有 tools、没有 vision）。这正是"文本约定协议"要覆盖的
+# 最坏情况——模型不会 function calling，一切靠行首标签驱动。如果 phi4
+# 能被协议驱动出记忆召回 / 联想 / 表情包，那支持 tools 的模型更没问题。
+#
+# 记忆与联想**故意不走 Nebula / MightBe**：E2E 要验证的是 Styx 自身的
+# 编排链路，让外部服务缺席，链路本身的问题才不会被"服务没起来"掩盖。
+
+[character]
+card = "examples/cards/linxia.md"
+user_name = "陈默"
+world = "当代都市"
+location = "拾光旧书店"
+time = "傍晚"
+user_role = "常客"
+
+[kernel]
+# large：给协议提示词和世界书留足位置。phi4 的上下文是 16384，
+# 默认预算在长对话里会把角色卡挤掉。
+budget = "large"
+# 温度拉高：角色扮演要的是"这个人会怎么反应"，不是"最可能的下一句"。
+temperature = 1.0
+max_tokens = 900
+write_pool = false
+# phi4 对一次"取资料→重说"够用了；设 2 会变成三倍延迟。
+protocol_hops = 1
+
+[llm]
+backend = "openai"
+
+[[llm.endpoints]]
+name = "ollama-phi4"
+base_url = "http://127.0.0.1:11434/v1"
+model = "phi4:latest"
+# 本机 14.7B Q4_K_M 首次推理要加载权重，60 秒默认值会假性超时。
+timeout_secs = 300
+enabled = true
+
+[memory]
+backend = "memory"
+
+[assoc]
+backend = "graph"
+
+[pool]
+enabled = false
+
+[web]
+addr = "127.0.0.1:8770"
+stickers = "crates/styx-web/web/stickers"
+session = "ollama-e2e"
+request_log = true

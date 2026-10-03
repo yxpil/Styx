@@ -279,7 +279,11 @@ mod tests {
                 if line.trim_end().is_empty() {
                     break;
                 }
-                if let Some(v) = line.to_lowercase().trim_end().strip_prefix("content-length:") {
+                if let Some(v) = line
+                    .to_lowercase()
+                    .trim_end()
+                    .strip_prefix("content-length:")
+                {
                     content_length = v.trim().parse().unwrap_or(0);
                 }
                 request.push_str(&line);
@@ -347,9 +351,8 @@ mod tests {
 
     #[test]
     fn propagates_non_2xx_as_error_when_asked() {
-        let (base, handle) = serve_once(
-            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 7\r\n\r\noffline",
-        );
+        let (base, handle) =
+            serve_once("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 7\r\n\r\noffline");
         let resp = PlainHttp::new()
             .send(&HttpRequest::get(format!("{base}/x")))
             .unwrap();

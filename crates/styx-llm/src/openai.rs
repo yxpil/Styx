@@ -118,6 +118,32 @@ impl ChatBackend for OpenAiBackend {
     }
 }
 
+/// 把一条消息编成 JSON。
+///
+/// **纯文本消息必须编成 `"content": "字符串"`，不能是分段数组。**
+/// 不少自建的 OpenAI 兼容端点和本地小模型只认字符串形式，碰上数组会直接
+/// 400 或（更糟）静默当成空消息。所以这里只在真的有图时才展开成分段数组，
+/// 没有图的时候发出的 JSON 和引入多模态之前逐字节相同。
+///
+/// 有图时，若正文是空的就**只发图片段**——OpenAI 的接口不接受
+/// `{"type":"text","text":""}` 这种空文本段，会报 400。
+fn message_value(m: &ChatMessage) -> Value {
+    if m.images.is_empty() {
+        return json!({ "role": m.role, "content": m.content });
+    }
+
+    let mut parts: Vec<Value> = Vec::with_capacity(m.images.len() + 1);
+    if !m.content.is_empty() {
+        parts.push(json!({ "type": "text", "text": m.content }));
+    }
+    for url in &m.images {
+        // url 原样透传。`data:image/jpeg;base64,...` 已经是目标格式，
+        // 这里再去解码再编码一遍只会多一次出错的机会（还得猜 MIME）。
+        parts.push(json!({ "type": "image_url", "image_url": { "url": url } }));
+    }
+    json!({ "role": m.role, "content": parts })
+}
+
 /// 组装 `/chat/completions` 的请求体。
 pub fn build_body(endpoint: &Endpoint, messages: &[ChatMessage], opts: &LlmOptions) -> Value {
     let model = opts
@@ -126,10 +152,7 @@ pub fn build_body(endpoint: &Endpoint, messages: &[ChatMessage], opts: &LlmOptio
         .filter(|m| !m.trim().is_empty())
         .unwrap_or(&endpoint.model);
 
-    let msgs: Vec<Value> = messages
-        .iter()
-        .map(|m| json!({ "role": m.role, "content": m.content }))
-        .collect();
+    let msgs: Vec<Value> = messages.iter().map(message_value).collect();
 
     let mut body = json!({
         "model": model,
@@ -344,6 +367,86 @@ mod tests {
         assert_eq!(sent["stream"], false);
         assert_eq!(sent["messages"][0]["role"], "system");
         assert_eq!(sent["messages"][1]["content"], "在吗");
+    }
+
+    /// 回归：**没有图的消息必须还是字符串形式。**
+    ///
+    /// 很多自建的 OpenAI 兼容端点和本地小模型只认 `"content": "..."`,
+    /// 碰上分段数组会 400。这条断言就是防止有人"顺手统一成数组"。
+    #[test]
+    fn a_text_only_message_stays_a_plain_string() {
+        let m = ChatMessage::user("在吗");
+        assert!(!m.has_images());
+        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        assert!(
+            body["messages"][0]["content"].is_string(),
+            "纯文本必须编成字符串，实际是 {}",
+            body["messages"][0]["content"]
+        );
+        // 序列化之后也不该冒出 `images` 字段
+        let json = serde_json::to_string(&ChatMessage::user("x")).unwrap();
+        assert!(!json.contains("images"), "空 images 不该出现在 JSON 里：{json}");
+    }
+
+    #[test]
+    fn an_image_turns_the_message_into_a_content_array() {
+        let m = ChatMessage::user("看看这个").with_image("data:image/jpeg;base64,AAAA");
+        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let content = &body["messages"][0]["content"];
+        assert!(content.is_array(), "带图必须展开成分段数组");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "看看这个");
+        assert_eq!(content[1]["type"], "image_url");
+        // data URL 原样透传，不解码不重编码
+        assert_eq!(content[1]["image_url"]["url"], "data:image/jpeg;base64,AAAA");
+    }
+
+    /// 图在前、话在后也允许；而**正文为空时绝不能发出空的 text 段**——
+    /// OpenAI 会对 `{"type":"text","text":""}` 直接报 400。
+    #[test]
+    fn an_empty_caption_yields_an_image_only_message() {
+        let m = ChatMessage::user("").with_image("data:image/png;base64,BBBB");
+        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1, "空正文不该产生 text 段：{content:?}");
+        assert_eq!(content[0]["type"], "image_url");
+    }
+
+    #[test]
+    fn several_images_keep_their_order() {
+        let m = ChatMessage::user("三张").with_images([
+            "data:image/png;base64,1",
+            "https://example.com/b.jpg",
+            "data:image/png;base64,3",
+        ]);
+        let body = build_body(&Endpoint::new("ep", "https://x/v1", "m"), &[m], &LlmOptions::default());
+        let content = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 4, "一段文字 + 三张图");
+        let urls: Vec<&str> = content[1..]
+            .iter()
+            .map(|p| p["image_url"]["url"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            urls,
+            vec![
+                "data:image/png;base64,1",
+                "https://example.com/b.jpg",
+                "data:image/png;base64,3"
+            ]
+        );
+    }
+
+    /// 序列化往返：`images` 缺席时默认成空，空时又不出现在输出里。
+    #[test]
+    fn images_round_trip_through_serde() {
+        let old = r#"{"role":"user","content":"老的格式"}"#;
+        let m: ChatMessage = serde_json::from_str(old).unwrap();
+        assert!(!m.has_images(), "旧格式没有 images 字段，应当默认成空");
+        assert_eq!(m.content, "老的格式");
+
+        let with = serde_json::to_string(&ChatMessage::user("x").with_image("data:image/png;base64,A")).unwrap();
+        let back: ChatMessage = serde_json::from_str(&with).unwrap();
+        assert_eq!(back.images, vec!["data:image/png;base64,A".to_string()]);
     }
 
     #[test]

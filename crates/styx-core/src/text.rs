@@ -47,6 +47,51 @@ pub fn round3(x: f32) -> f64 {
     ((x as f64) * 1000.0).round() / 1000.0
 }
 
+/// 剥掉**最外层**一层成对引号（`「」` / `『』` / `“”`）。
+///
+/// 只认"整段被包住"的情况：`他说「我不去」` 的首尾是 `他` 和 `」`，不成对，
+/// 原样返回 `None`。这个约束不是保守，是必须——否则
+/// `陈默：「我不去」——他这么说过。` 会被拦腰截断，后半句直接消失。
+pub fn strip_one_quote_layer(s: &str) -> Option<&str> {
+    let t = s.trim();
+    let first = t.chars().next()?;
+    let last = t.chars().last()?;
+    if t.chars().count() < 2 || first == last {
+        return None;
+    }
+    if !matches!((first, last), ('「', '」') | ('『', '』') | ('“', '”')) {
+        return None;
+    }
+    Some(t[first.len_utf8()..t.len() - last.len_utf8()].trim())
+}
+
+/// 反复剥掉成对的引号，直到不再成对为止。
+///
+/// 为什么要循环：模型会**套两层**（`「「你来了。」」`）。剥一层之后剩下的
+/// `「你来了。」` 仍然带引号，此时外层再包一次就渲染成
+/// `林夏：「「你来了。」」`——读起来像解析器坏了，其实每一步都"没错"。
+///
+/// 两个调用点必须共用这个函数：解析时剥（保证 `reply.speech` 干净，
+/// web 前端直接读它）与渲染时剥（防住从别处构造的 `Event`）。各写一份
+/// 迟早会漂移成"一边剥一边没剥"，表现为同一种文本在两个前端长得不一样。
+pub fn strip_quote_wrappers(s: &str) -> &str {
+    let mut t = s.trim();
+    while let Some(inner) = strip_one_quote_layer(t) {
+        t = inner;
+    }
+    t
+}
+
+/// 一张图在提示词预算里折算多少 token。
+///
+/// 图片不会真的被"读成 token"，而且各家算法不同（OpenAI 大致按
+/// `(宽 × 高) / 750`，一张 1024×1024 约 1400）。这里取一个折中的保守值。
+///
+/// **这个数字的用途只是预算裁剪，不是计费。** 关键在于别让"这条消息带了三张图"
+/// 在预算表里显示成 0——那样历史裁剪会以为腾出了空间，实际上没有，
+/// 于是请求要么被端点拒，要么把真正重要的历史挤掉。
+pub const IMAGE_TOKEN_COST: usize = 900;
+
 /// 粗略估算文本的 token 数。
 ///
 /// 结果偏保守（宁可高估），用于提示词预算裁剪。
@@ -112,15 +157,14 @@ pub fn truncate_tail_to_tokens(s: &str, budget: usize) -> String {
 /// 简易停用词（中英混合），用于关键词抽取时剔除噪音。
 pub const STOPWORDS: &[&str] = &[
     // 中文
-    "的", "了", "在", "是", "我", "你", "他", "她", "它", "们", "这", "那", "有", "和", "与",
-    "就", "都", "也", "不", "很", "会", "要", "把", "被", "给", "对", "从", "到", "为", "着",
-    "一个", "什么", "怎么", "这个", "那个", "自己", "已经", "还是", "但是", "因为", "所以",
-    "然后", "如果", "可以", "没有", "知道", "觉得", "现在", "时候", "一样", "这样", "那样",
-    // 英文
-    "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "in", "on", "at", "for",
-    "with", "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has",
-    "had", "i", "you", "he", "she", "it", "we", "they", "this", "that", "these", "those", "as",
-    "by", "from", "not", "no", "yes", "so", "my", "your", "his", "her", "its", "our", "their",
+    "的", "了", "在", "是", "我", "你", "他", "她", "它", "们", "这", "那", "有", "和", "与", "就",
+    "都", "也", "不", "很", "会", "要", "把", "被", "给", "对", "从", "到", "为", "着", "一个",
+    "什么", "怎么", "这个", "那个", "自己", "已经", "还是", "但是", "因为", "所以", "然后", "如果",
+    "可以", "没有", "知道", "觉得", "现在", "时候", "一样", "这样", "那样", // 英文
+    "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "in", "on", "at", "for", "with",
+    "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "have", "has", "had", "i",
+    "you", "he", "she", "it", "we", "they", "this", "that", "these", "those", "as", "by", "from",
+    "not", "no", "yes", "so", "my", "your", "his", "her", "its", "our", "their",
 ];
 
 /// 是否为停用词。
@@ -205,11 +249,7 @@ pub fn keywords(s: &str, limit: usize) -> Vec<String> {
             .then_with(|| b.0.chars().count().cmp(&a.0.chars().count()))
             .then_with(|| a.0.cmp(&b.0))
     });
-    ranked
-        .into_iter()
-        .take(limit)
-        .map(|(t, _)| t)
-        .collect()
+    ranked.into_iter().take(limit).map(|(t, _)| t).collect()
 }
 
 /// 通用分词：CJK 单字 + 双字组合，ASCII 按非字母数字切分。
@@ -263,7 +303,13 @@ pub fn tokenize(s: &str) -> Vec<String> {
 pub fn summarize(s: &str, max_chars: usize) -> String {
     let flat: String = s
         .chars()
-        .map(|c| if c == '\n' || c == '\r' || c == '\t' { ' ' } else { c })
+        .map(|c| {
+            if c == '\n' || c == '\r' || c == '\t' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     let mut out = String::new();
     let mut last_space = false;

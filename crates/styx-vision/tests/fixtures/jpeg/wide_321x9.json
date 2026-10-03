@@ -1,0 +1,18 @@
+{
+  "file": "wide_321x9.jpg",
+  "raw": "wide_321x9.raw",
+  "width": 321,
+  "height": 9,
+  "jpeg_size": 1249,
+  "mean_luma": 0.498358,
+  "mean_rgb": [
+    126.8325,
+    127.343,
+    126.387
+  ],
+  "options": {
+    "quality": 80,
+    "subsampling": 2
+  },
+  "mode": "RGB"
+}

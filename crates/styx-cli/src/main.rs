@@ -3,6 +3,7 @@
 //! ```text
 //!   styx repl     交互式角色扮演（默认命令）
 //!   styx say      单次对话，适合脚本 / 管道
+//!   styx web      在浏览器里演（含表情包面板）
 //!   styx serve    把内核暴露成多会话 TCP 服务
 //!   styx probe    逐个探测后端（模型 / Nebula / MightBe / MemoryPool）
 //!   styx demo     完全离线跑通整条链路（CI 也用它做冒烟测试）
@@ -23,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Args, Parser, Subcommand};
-use styx_core::{CharacterCard, Kernel, Scene, StyxError};
+use styx_core::{CharacterCard, Kernel, Scene, StickerCatalog, StyxError};
 
 use crate::config::Config;
 use crate::wiring::Wiring;
@@ -58,6 +59,8 @@ enum Command {
     Repl(ReplArgs),
     /// 单次对话：读一句话，打印角色的回应
     Say(SayArgs),
+    /// 启动 Web 前端：在浏览器里演，支持表情包
+    Web(WebArgs),
     /// 启动多会话 TCP 服务
     Serve(ServeArgs),
     /// 探测各后端的可用性
@@ -97,6 +100,28 @@ struct SayArgs {
     /// 你说的话（可以多个词；不写则从标准输入读一行）
     #[arg(value_name = "TEXT")]
     text: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct WebArgs {
+    /// 监听地址（覆盖配置里的 web.addr）
+    #[arg(long)]
+    addr: Option<String>,
+    /// 角色卡路径（覆盖配置）
+    #[arg(short, long, value_name = "FILE")]
+    card: Option<PathBuf>,
+    /// 表情包目录（覆盖配置里的 web.stickers）
+    #[arg(long, value_name = "DIR")]
+    stickers: Option<PathBuf>,
+    /// 默认会话名（同一个名字刷新浏览器后能接着演）
+    #[arg(long)]
+    session: Option<String>,
+    /// 启动后自动打开浏览器
+    #[arg(long)]
+    open: bool,
+    /// 打印每个请求（排查前端问题、观察回合耗时）
+    #[arg(long)]
+    request_log: bool,
 }
 
 #[derive(Debug, Args)]
@@ -177,6 +202,7 @@ fn run(cli: Cli) -> Result<(), String> {
         Command::Probe(a) => cmd_probe(&cfg, &a),
         Command::Demo(a) => cmd_demo(&a, cli.verbose),
         Command::Say(a) => cmd_say(&cfg, &a, cli.verbose),
+        Command::Web(a) => cmd_web(&cfg, &a, cli.verbose),
         Command::Repl(a) => cmd_repl(&cfg, &a, cli.verbose),
         Command::Serve(a) => cmd_serve(&cfg, &a, cli.verbose),
     }
@@ -202,6 +228,7 @@ fn cmd_init(args: &InitArgs, verbose: bool) -> Result<(), String> {
     println!("已生成配置与示例角色卡。接下来：");
     println!("  styx probe          看看哪些后端能用");
     println!("  styx repl           开始对话");
+    println!("  styx web            在浏览器里演（把表情包放进 web/stickers）");
     println!("  styx demo           不联网先跑一遍试试");
     Ok(())
 }
@@ -445,6 +472,9 @@ fn cmd_repl(cfg: &Config, args: &ReplArgs, verbose: bool) -> Result<(), String> 
 struct Factory {
     cfg: Config,
     card_path: Option<PathBuf>,
+    /// 表情包目录。`styx web` 会挂上它，`styx serve` 默认没有——
+    /// 终端客户端发不出一张图，给它加载目录只是徒增困惑。
+    stickers: Option<Arc<StickerCatalog>>,
 }
 
 impl styx_server::KernelFactory for Factory {
@@ -454,6 +484,10 @@ impl styx_server::KernelFactory for Factory {
         let namespace = format!("{}-{}", card.namespace(), sanitize(session_id));
         let wiring = Wiring::build(&self.cfg, &namespace, &seed_from_card(&card))
             .map_err(StyxError::Other)?;
+        let wiring = match &self.stickers {
+            Some(c) => wiring.with_stickers(Arc::clone(c)),
+            None => wiring,
+        };
         for note in &wiring.notes {
             eprintln!("[{}] · {note}", session_id);
         }
@@ -463,13 +497,18 @@ impl styx_server::KernelFactory for Factory {
     }
 
     fn describe(&self) -> String {
+        let stickers = match &self.stickers {
+            Some(c) => format!("，表情包 {} 张", c.len()),
+            None => String::new(),
+        };
         format!(
-            "styx-cli（模型后端 {}，角色卡 {}）",
+            "styx-cli（模型后端 {}，角色卡 {}{}）",
             self.cfg.llm.backend,
             self.card_path
                 .as_ref()
                 .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "内置示例".into())
+                .unwrap_or_else(|| "内置示例".into()),
+            stickers
         )
     }
 }
@@ -483,10 +522,103 @@ fn cmd_serve(cfg: &Config, args: &ServeArgs, verbose: bool) -> Result<(), String
     let factory = Factory {
         cfg: cfg.clone(),
         card_path: args.card.clone(),
+        stickers: None,
     };
     let server = Arc::new(styx_server::Server::new(Arc::new(factory)).with_default_session(&args.session));
     eprintln!("提示：客户端用一行一个 JSON 对话，例如 echo '{{\"op\":\"ping\"}}' | nc 127.0.0.1 7879");
     server.bind_and_run(&args.addr).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------- web
+
+fn cmd_web(cfg: &Config, args: &WebArgs, verbose: bool) -> Result<(), String> {
+    let addr = args
+        .addr
+        .clone()
+        .unwrap_or_else(|| cfg.web.addr.clone());
+    let session = args
+        .session
+        .clone()
+        .unwrap_or_else(|| cfg.web.session.clone());
+
+    if verbose {
+        for line in probe::run(cfg, false) {
+            eprintln!("· {}", line.render());
+        }
+    }
+
+    // 表情包目录：命令行 > 配置 > 当前目录的 web/stickers > 仓库内的默认目录
+    let candidates = sticker_candidates(cfg, args.stickers.as_deref());
+    let dir = match styx_web::locate_sticker_dir(&candidates) {
+        Some(d) => d,
+        None => {
+            let first = candidates.first().cloned().unwrap_or_default();
+            eprintln!(
+                "· 表情包目录 {} 不存在，界面会是空的（放进 PNG 再启动即可）",
+                first.display()
+            );
+            first
+        }
+    };
+    let catalog = styx_web::load_catalog(&dir);
+    if catalog.is_empty() {
+        eprintln!("· 表情包：0 张（{}）", dir.display());
+    } else {
+        eprintln!("· 表情包：{} 张（{}）", catalog.len(), dir.display());
+    }
+
+    let factory = Factory {
+        cfg: cfg.clone(),
+        card_path: args.card.clone(),
+        stickers: Some(Arc::clone(&catalog)),
+    };
+    let server = Arc::new(
+        styx_server::Server::new(Arc::new(factory)).with_default_session(&session),
+    );
+    let web = Arc::new(
+        styx_web::WebServer::new(server, catalog, dir)
+            .with_default_session(&session)
+            .with_verbose(args.request_log || verbose),
+    );
+
+    if args.open || cfg.web.open {
+        // 等监听真正起来再开浏览器，否则会开出"无法访问"
+        let url = format!("http://{}", browser_host(&addr));
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            styx_web::open_browser(&url);
+        });
+    }
+
+    web.bind_and_run(&addr)
+        .map_err(|e| format!("无法监听 {addr}：{e}"))
+}
+
+/// 监听地址 → 浏览器能访问的地址（`0.0.0.0` 换成回环）。
+fn browser_host(addr: &str) -> String {
+    if let Some(port) = addr.strip_prefix("0.0.0.0") {
+        format!("127.0.0.1{port}")
+    } else if let Some(port) = addr.strip_prefix("[::]") {
+        format!("127.0.0.1{port}")
+    } else {
+        addr.to_string()
+    }
+}
+
+/// 表情包目录的候选位置（按优先级）。
+fn sticker_candidates(cfg: &Config, explicit: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = Vec::new();
+    if let Some(p) = explicit {
+        v.push(p.to_path_buf());
+    }
+    if !cfg.web.stickers.as_os_str().is_empty() {
+        v.push(cfg.web.stickers.clone());
+    }
+    v.push(PathBuf::from("web/stickers"));
+    // 在仓库里直接 `cargo run -p styx -- web` 时能用上自带的示例表情包
+    v.push(PathBuf::from("crates/styx-web/web/stickers"));
+    v.dedup();
+    v
 }
 
 // -------------------------------------------------------------------- 公共
@@ -550,6 +682,7 @@ fn one_line(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use styx_core::KernelConfig;
 
     #[test]
     fn builtin_card_is_valid() {
@@ -578,6 +711,15 @@ mod tests {
         assert_eq!(cfg.llm.backend, "auto");
         assert_eq!(cfg.character.location, "拾光旧书店");
         assert!(cfg.tools.builtin);
+        // 模板里的 [web] 必须和服务默认值一致，否则生成配置后行为会悄悄变掉
+        assert_eq!(cfg.web.addr, Config::default().web.addr);
+        assert_eq!(cfg.web.session, "web");
+        assert!(!cfg.web.open);
+        // 模板里的内核调参也不该和代码默认值打架
+        assert_eq!(
+            cfg.kernel.assoc_seeds,
+            Some(KernelConfig::default().assoc_seeds)
+        );
     }
 
     #[test]
@@ -600,5 +742,27 @@ mod tests {
     fn one_line_truncates() {
         assert_eq!(one_line("abc\ndef", 20), "abc def");
         assert_eq!(one_line("abcdef", 3), "abc…");
+    }
+
+    #[test]
+    fn browser_host_rewrites_wildcard_binds() {
+        assert_eq!(browser_host("0.0.0.0:8770"), "127.0.0.1:8770");
+        assert_eq!(browser_host("[::]:8770"), "127.0.0.1:8770");
+        assert_eq!(browser_host("127.0.0.1:8080"), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn sticker_candidates_put_the_explicit_dir_first_and_dedupe() {
+        let cfg = Config::default();
+        let v = sticker_candidates(&cfg, Some(std::path::Path::new("/tmp/emoji")));
+        assert_eq!(v[0], PathBuf::from("/tmp/emoji"));
+
+        // 配置默认值与候选列表里那一档重名，不该出现两遍
+        let dupes = v
+            .iter()
+            .filter(|p| *p == std::path::Path::new("web/stickers"))
+            .count();
+        assert_eq!(dupes, 1, "{v:?}");
+        assert!(v.iter().any(|p| p.ends_with("styx-web/web/stickers")));
     }
 }

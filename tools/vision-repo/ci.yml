@@ -1,0 +1,59 @@
+# 镜像仓库的 CI。
+#
+# 与主仓库（Styx）的 CI 有三处有意的不同：
+#   1. 去掉「跑一次角色扮演 demo」那一步——镜像里没有内核；
+#   2. 测试跑两遍：默认特性（零第三方依赖的本地路径）与 `http` 特性
+#      （远程后端的解析逻辑）。主仓库的 CI 只跑前者，于是 `remote.rs` 里
+#      那些解析测试在主仓库里默认是不被执行的；
+#   3. 加上 example 的编译检查——`inspect` 是镜像的主要上手入口，
+#      它编不过等于没有入口。
+#
+# 这个文件由主仓库的 tools/sync_vision_repo.py 复制过来，不要手改。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Build
+        run: cargo build --workspace --all-targets --all-features
+
+      - name: Test (本地路径，零第三方依赖)
+        run: cargo test --workspace
+
+      - name: Test (含远程后端)
+        run: cargo test --workspace --features styx-vision/http

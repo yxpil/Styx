@@ -8,7 +8,9 @@ members = [
     "crates/styx-assoc",
     "crates/styx-pool",
     "crates/styx-tools",
+    "crates/styx-vision",
     "crates/styx-server",
+    "crates/styx-web",
     "crates/styx-cli",
 ]
 
@@ -28,7 +30,9 @@ styx-memory = { path = "crates/styx-memory", version = "0.1.0" }
 styx-assoc = { path = "crates/styx-assoc", version = "0.1.0" }
 styx-pool = { path = "crates/styx-pool", version = "0.1.0" }
 styx-tools = { path = "crates/styx-tools", version = "0.1.0" }
+styx-vision = { path = "crates/styx-vision", version = "0.1.0" }
 styx-server = { path = "crates/styx-server", version = "0.1.0" }
+styx-web = { path = "crates/styx-web", version = "0.1.0" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

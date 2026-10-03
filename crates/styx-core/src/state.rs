@@ -222,6 +222,15 @@ impl DynamicState {
     }
 }
 
+/// 两个可选数值相加：任一侧缺失就取另一侧。
+fn add_opt(a: Option<f32>, b: Option<f32>) -> Option<f32> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (Some(x), Some(y)) => Some(x + y),
+    }
+}
+
 /// 一次状态增量（由模型输出解析而来，或由程序直接构造）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StateDelta {
@@ -262,6 +271,41 @@ impl StateDelta {
             && self.trust.is_empty()
             && self.agenda.is_empty()
             && self.flags.is_empty()
+    }
+
+    /// 把另一份增量叠加进来，得到一份新增量。
+    ///
+    /// 数值字段**相加**，映射与列表取并集；`mood` 以 `other` 为准
+    /// （它是"更晚发生"的那一份，更能代表此刻）。
+    ///
+    /// 之所以要能在结算前合并，是因为同一回合可能有多个增量来源
+    /// （模型的 `[情]` 标签、对方发来的表情包带来的情绪传染……）。
+    /// 若分两次 `apply`，每次都会被 `clamp` 到合法区间一次，
+    /// 结果会依赖调用顺序——合并后再夹取才是确定的。
+    pub fn merged(&self, other: &StateDelta) -> StateDelta {
+        let mut out = self.clone();
+        if other.mood.is_some() {
+            out.mood = other.mood.clone();
+        }
+        out.valence = add_opt(out.valence, other.valence);
+        out.arousal = add_opt(out.arousal, other.arousal);
+        out.energy = add_opt(out.energy, other.energy);
+        out.tension = add_opt(out.tension, other.tension);
+        for (k, v) in &other.relations {
+            *out.relations.entry(k.clone()).or_insert(0.0) += *v;
+        }
+        for (k, v) in &other.trust {
+            *out.trust.entry(k.clone()).or_insert(0.0) += *v;
+        }
+        for a in &other.agenda {
+            if !out.agenda.contains(a) {
+                out.agenda.push(a.clone());
+            }
+        }
+        for (k, v) in &other.flags {
+            out.flags.insert(k.clone(), v.clone());
+        }
+        out
     }
 
     /// 渲染为一行摘要（打印在回合报告里）。
@@ -416,6 +460,33 @@ mod tests {
             ..Default::default()
         };
         assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn deltas_merge_before_settling() {
+        let a = StateDelta {
+            valence: Some(-0.2),
+            relations: BTreeMap::from([("陈默".to_string(), -0.1)]),
+            agenda: vec!["守住店".into()],
+            ..Default::default()
+        };
+        let b = StateDelta {
+            mood: Some("戒备".into()),
+            valence: Some(0.05),
+            arousal: Some(0.3),
+            relations: BTreeMap::from([("陈默".to_string(), -0.05)]),
+            agenda: vec!["守住店".into(), "问清照片".into()],
+            ..Default::default()
+        };
+        let m = a.merged(&b);
+        assert!((m.valence.unwrap() + 0.15).abs() < 1e-6);
+        assert_eq!(m.mood.as_deref(), Some("戒备"));
+        assert!((m.arousal.unwrap() - 0.3).abs() < 1e-6);
+        assert!((m.relations["陈默"] + 0.15).abs() < 1e-6);
+        assert_eq!(m.agenda.len(), 2, "重复的意图不该出现两次");
+        // 合并必须无副作用：两份原增量都不能被改动
+        assert!((a.valence.unwrap() + 0.2).abs() < 1e-6);
+        assert!(b.mood.is_some());
     }
 
     #[test]

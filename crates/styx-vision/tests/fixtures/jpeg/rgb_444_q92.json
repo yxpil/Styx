@@ -1,0 +1,18 @@
+{
+  "file": "rgb_444_q92.jpg",
+  "raw": "rgb_444_q92.raw",
+  "width": 64,
+  "height": 48,
+  "jpeg_size": 1432,
+  "mean_luma": 0.498126,
+  "mean_rgb": [
+    127.0273,
+    127.016,
+    127.0407
+  ],
+  "options": {
+    "quality": 92,
+    "subsampling": 0
+  },
+  "mode": "RGB"
+}

@@ -1,0 +1,18 @@
+{
+  "file": "tiny_8x8.jpg",
+  "raw": "tiny_8x8.raw",
+  "width": 8,
+  "height": 8,
+  "jpeg_size": 722,
+  "mean_luma": 0.555927,
+  "mean_rgb": [
+    129.4844,
+    145.7656,
+    153.3438
+  ],
+  "options": {
+    "quality": 90,
+    "subsampling": 0
+  },
+  "mode": "RGB"
+}

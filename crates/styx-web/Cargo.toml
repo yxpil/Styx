@@ -1,0 +1,18 @@
+[package]
+name = "styx-web"
+description = "Styx: Web 前端 —— 把角色扮演内核接到浏览器上（零新依赖的 HTTP 服务 + 内嵌单页）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+styx-core.workspace = true
+styx-server.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+styx-assoc.workspace = true
+styx-llm.workspace = true
+styx-memory.workspace = true

@@ -24,11 +24,7 @@ impl Url {
         let raw = raw.trim();
         let (scheme, rest) = match raw.split_once("://") {
             Some((s, r)) => (s.to_lowercase(), r),
-            None => {
-                return Err(HttpError::InvalidUrl(format!(
-                    "缺少协议前缀：{raw}"
-                )))
-            }
+            None => return Err(HttpError::InvalidUrl(format!("缺少协议前缀：{raw}"))),
         };
         if scheme != "http" && scheme != "https" {
             return Err(HttpError::InvalidUrl(format!("不支持的协议：{scheme}")));
@@ -44,7 +40,10 @@ impl Url {
         }
 
         // 去掉 userinfo（我们不用它，但得容忍）
-        let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+        let authority = authority
+            .rsplit_once('@')
+            .map(|(_, h)| h)
+            .unwrap_or(authority);
 
         let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
             // IPv6 字面量

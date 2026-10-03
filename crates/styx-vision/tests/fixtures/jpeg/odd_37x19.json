@@ -1,0 +1,18 @@
+{
+  "file": "odd_37x19.jpg",
+  "raw": "odd_37x19.raw",
+  "width": 37,
+  "height": 19,
+  "jpeg_size": 1054,
+  "mean_luma": 0.529136,
+  "mean_rgb": [
+    132.2518,
+    134.7539,
+    142.8592
+  ],
+  "options": {
+    "quality": 88,
+    "subsampling": 2
+  },
+  "mode": "RGB"
+}

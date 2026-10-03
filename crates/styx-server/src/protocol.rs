@@ -27,6 +27,14 @@ pub enum Request {
     },
     /// 说一句，推进一个回合。
     Say { text: String },
+    /// 发一张表情包，推进一个回合。
+    ///
+    /// 与 `Say` 分开而不是"由客户端把表情包拼成一句话"：只有服务端
+    /// 知道表情包目录长什么样，也才有资格把编号写进事件的 `meta`，
+    /// 让前端分得清"他提到开心"和"他发了一张开心的图"。
+    Sticker { id: String },
+    /// 列出这个角色可用的表情包。
+    Stickers,
     /// 查看当前状态。
     State,
     /// 查看当前场景。
@@ -84,6 +92,8 @@ impl Request {
             Request::Ping => "ping",
             Request::Hello { .. } => "hello",
             Request::Say { .. } => "say",
+            Request::Sticker { .. } => "sticker",
+            Request::Stickers => "stickers",
             Request::State => "state",
             Request::Scene => "scene",
             Request::SetScene { .. } => "set_scene",
@@ -170,6 +180,8 @@ mod tests {
             (r#"{"op":"ping"}"#, "ping"),
             (r#"{"op":"hello","session":"a"}"#, "hello"),
             (r#"{"op":"say","text":"你好"}"#, "say"),
+            (r#"{"op":"sticker","id":"happy_01"}"#, "sticker"),
+            (r#"{"op":"stickers"}"#, "stickers"),
             (r#"{"op":"state"}"#, "state"),
             (r#"{"op":"scene"}"#, "scene"),
             (r#"{"op":"tools"}"#, "tools"),
@@ -207,6 +219,14 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+
+        let r = Request::parse(r#"{"op":"sticker","id":"cry_03"}"#).unwrap();
+        match r {
+            Request::Sticker { id } => assert_eq!(id, "cry_03"),
+            other => panic!("{other:?}"),
+        }
+        // 少了 id 就该解析失败，而不是变成"发一张空表情"
+        assert!(Request::parse(r#"{"op":"sticker"}"#).is_err());
     }
 
     #[test]

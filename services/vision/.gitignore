@@ -1,0 +1,10 @@
+# 下载到本地的 ONNX 模型（yolov8n 13 MB + WD14 tagger 311 MB）。
+# 不进仓库：体积大、可复现（`python fetch_models.py` 一条命令拉回来），
+# 而且 HuggingFace 上的文件本来就会更新，提交一份快照反而会让别人以为
+# 那是我们维护的。
+models/
+
+# 本地跑服务用的虚拟环境与 uv 缓存
+.venv/
+.uv-cache/
+__pycache__/

@@ -1,0 +1,18 @@
+{
+  "file": "ycbcr_420_q75.jpg",
+  "raw": "ycbcr_420_q75.raw",
+  "width": 64,
+  "height": 48,
+  "jpeg_size": 903,
+  "mean_luma": 0.498203,
+  "mean_rgb": [
+    127.0423,
+    127.0417,
+    127.0417
+  ],
+  "options": {
+    "quality": 75,
+    "subsampling": 2
+  },
+  "mode": "RGB"
+}

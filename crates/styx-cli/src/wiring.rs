@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use styx_core::ports::{AssocPort, LlmPort, MemoryPort, PoolPort, ToolPort};
-use styx_core::{CharacterCard, Kernel, Scene};
+use styx_core::{CharacterCard, Kernel, Scene, StickerCatalog};
 
 use styx_assoc::{InMemoryAssoc, MightBeAssoc, MightBeConfig};
 use styx_llm::{EndpointPool, OpenAiBackend};
@@ -40,6 +40,9 @@ pub struct Wiring {
     pub assoc: Arc<dyn AssocPort>,
     pub pool: Option<Arc<dyn PoolPort>>,
     pub tools: Option<Arc<dyn ToolPort>>,
+    /// 表情包目录。装配阶段不做决定（它和"后端"无关，是角色资源），
+    /// 由需要它的入口（目前的 `styx web`）用 [`Wiring::with_stickers`] 挂上。
+    pub stickers: Option<Arc<StickerCatalog>>,
     /// 装配过程中的说明（降级原因、实际连上的服务……），由上层打印。
     pub notes: Vec<String>,
 }
@@ -71,6 +74,7 @@ impl Wiring {
             assoc,
             pool,
             tools,
+            stickers: None,
             notes,
         })
     }
@@ -100,8 +104,15 @@ impl Wiring {
             assoc,
             pool: Some(pool),
             tools: Some(registry.into_port()),
+            stickers: None,
             notes: vec!["离线模式：Mock 模型 + 内存记忆 + 内存联想".into()],
         }
+    }
+
+    /// 挂上表情包目录（链式，不影响其它端口）。
+    pub fn with_stickers(mut self, stickers: Arc<StickerCatalog>) -> Self {
+        self.stickers = Some(stickers);
+        self
     }
 
     /// 造一个可以直接开演的内核。
@@ -122,6 +133,9 @@ impl Wiring {
         }
         if let Some(t) = &self.tools {
             builder = builder.tools(t.clone());
+        }
+        if let Some(c) = &self.stickers {
+            builder = builder.stickers(c.clone());
         }
         builder.build().map_err(|e| e.to_string())
     }
