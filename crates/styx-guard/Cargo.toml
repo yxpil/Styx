@@ -1,0 +1,16 @@
+[package]
+name = "styx-guard"
+description = "服务层边界防护：连接准入、优雅关闭、配额"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+ctrlc = { workspace = true }
+
+[dev-dependencies]
+toml.workspace = true

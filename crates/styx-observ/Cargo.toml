@@ -1,0 +1,23 @@
+[package]
+name = "styx-observ"
+description = "可观测性：结构化日志、指标、告警规则"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+styx-http = { workspace = true, optional = true }
+
+[features]
+default = []
+# webhook 告警需要能发 HTTP。默认不开：多数部署里把结构化日志交给
+# 采集器就够了，不必让应用自己再当一回客户端。
+webhook = ["dep:styx-http"]
+
+[dev-dependencies]
+toml.workspace = true

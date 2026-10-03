@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # CI 只构建一次，增量编译纯属浪费 —— 更要紧的是它在 Windows runner 上会翻车：
+  # `target/debug/incremental` 的写入被拒（os error 5）之后，clippy 会直接崩成
+  # "the compiler unexpectedly panicked"。关掉它，三平台都能稳定跑完。
+  CARGO_INCREMENTAL: 0
 
 jobs:
   test:
@@ -33,13 +37,21 @@ jobs:
 
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        # 带上 `styx-vision/http`：与下面的 Test 用同一套 feature，
+        # 免得 feature 门后的代码一路"没被 lint 过"。
+        run: cargo clippy --workspace --all-targets --features styx-vision/http -- -D warnings
 
       - name: Build
         run: cargo build --workspace --all-targets
 
       - name: Test
-        run: cargo test --workspace
+        # 必须带上 `styx-vision/http`：不带的话，HTTP 后端那条分支下的
+        # 测试会被静默跳过——CI 一路绿着，而那部分代码一次都没跑过。
+        run: cargo test --workspace --features styx-vision/http
+
+      - name: Check benches compile
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo bench --workspace --no-run
 
       - name: Offline end-to-end demo
         run: cargo run -q -p styx -- demo --turns 2

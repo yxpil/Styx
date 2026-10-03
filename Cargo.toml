@@ -9,6 +9,8 @@ members = [
     "crates/styx-pool",
     "crates/styx-tools",
     "crates/styx-vision",
+    "crates/styx-guard",
+    "crates/styx-observ",
     "crates/styx-server",
     "crates/styx-web",
     "crates/styx-cli",
@@ -31,6 +33,8 @@ styx-assoc = { path = "crates/styx-assoc", version = "0.1.0" }
 styx-pool = { path = "crates/styx-pool", version = "0.1.0" }
 styx-tools = { path = "crates/styx-tools", version = "0.1.0" }
 styx-vision = { path = "crates/styx-vision", version = "0.1.0" }
+styx-guard = { path = "crates/styx-guard", version = "0.1.0" }
+styx-observ = { path = "crates/styx-observ", version = "0.1.0" }
 styx-server = { path = "crates/styx-server", version = "0.1.0" }
 styx-web = { path = "crates/styx-web", version = "0.1.0" }
 
@@ -40,6 +44,15 @@ thiserror = "2"
 toml = "0.8"
 clap = { version = "4", features = ["derive", "env"] }
 
+# --- 服务层防护 ---
+# 只有 ctrlc 一个：它把 SIGINT / SetConsoleCtrlHandler 的平台差异挡在外面，
+# 是"优雅关闭"这件事上唯一值得引的依赖。
+ctrlc = "3"
+
+# 基准。只开 `cargo_bench_support`，关掉画图（plotters）和并行（rayon）：
+# 我们要的是数字，不是报告页。
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
+
 # --- 与 Nebula 对齐的密码学原语（用于复刻其 NEBULA2 加密会话协议）---
 argon2 = "0.5"
 chacha20poly1305 = "0.10"
@@ -48,5 +61,13 @@ hmac = "0.12"
 sha2 = "0.10"
 
 [profile.release]
-opt-level = 2
-lto = false
+opt-level = 3
+# thin LTO 让跨 crate 的内联成为可能。这个项目拆成了十几个 crate，
+# 回合路径上的函数（解析 → 状态推进 → 提示词拼装）横跨三四个 crate，
+# 没有 LTO 时它们全在各自的编译单元里，边界上的调用一次也省不掉。
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+# 刻意**不设** `panic = "abort"`：服务是一连接一线程，某个连接的
+# panic 应该只带走那一个线程。改成 abort 会把它升级成整个进程退出，
+# 而且 `styx-guard` 里"panic 也要归还连接名额"的保证会一起失效。
