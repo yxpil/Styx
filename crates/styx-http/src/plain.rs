@@ -395,4 +395,28 @@ mod tests {
         assert_eq!(parse_status("HTTP/1.0 404 Not Found").unwrap(), 404);
         assert!(parse_status("garbage").is_err());
     }
+
+    /// 端到端：URL 路径里的 `\r\n` 会真的变成**请求头**发出去。
+    ///
+    /// `write_request` 不检查任何字段里的 CR/LF，`&req.headers` 与 `url.path`
+    /// 都是原样 `format!` 进请求的。这里注入一个 `Host`，而代码补的那个 Host
+    /// 仍在——于是同一份请求里有**两个 Host 头**，这正是请求走私/缓存投毒的
+    /// 经典前提。
+    ///
+    /// URL 目前全部来自本地配置，所以这不是现成的远程攻击链；但 `styx-http`
+    /// 是公开 API，把 CRLF 挡在写出之前是它自己的责任。
+    #[test]
+    fn crlf_in_the_path_injects_a_header_and_duplicates_host() {
+        let (base, handle) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let url = format!("{base}/x\r\nHost: evil.example");
+        let _ = PlainHttp::new().send(&HttpRequest::get(url));
+
+        let raw = handle.join().unwrap().to_lowercase();
+        assert!(raw.contains("host: evil.example"), "{raw:?}");
+        assert_eq!(
+            raw.matches("host:").count(),
+            2,
+            "应当同时存在注入的与代码补的 Host：{raw:?}"
+        );
+    }
 }

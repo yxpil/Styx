@@ -206,4 +206,25 @@ mod tests {
         assert!(Url::parse("http://").is_err());
         assert!(Url::parse("http://h:abc/").is_err());
     }
+
+    /// 解析层**不**过滤 host / path 里的 CR、LF 与控制字符。
+    ///
+    /// 这条不是在断言"正确行为"，而是在把现状钉住——`plain.rs::write_request`
+    /// 会把这些字节原样拼进请求行，于是 CRLF 变成注入的请求头。修的时候应当
+    /// 在这里加拒绝，然后这条测试改成 `.is_err()`。
+    ///
+    /// 注意 host 这一路要过 `rsplit_once(':')` 的端口检查（冒号后必须全是数字），
+    /// 所以能注入的头值得长得像数字。**这不是防护**，只是那道检查的副产物：
+    /// 换成不带冒号的注入目标（比如 `X-Bad:1`）就绕过去了。
+    #[test]
+    fn control_characters_survive_url_parsing() {
+        // host 里的 CRLF：Host 头会被劈成两行
+        let u = Url::parse("http://evil\r\nX-Bad:1/").unwrap();
+        assert_eq!(u.host, "evil\r\nX-Bad");
+        assert_eq!(u.host_header(), "evil\r\nX-Bad:1");
+
+        // path 里的 CRLF：请求行会被劈开，可以再补一个 Host（重复 Host 头）
+        let u = Url::parse("http://h/x\r\nHost: evil").unwrap();
+        assert_eq!(u.path, "/x\r\nHost: evil");
+    }
 }
