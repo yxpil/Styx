@@ -263,3 +263,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## 许可
 
 MIT © 2026 yxpil
+
+---
+
+<div align="center">
+
+<a href="https://github.com/yxpil/Styx">
+  <img width="100%" src="https://alittlecatgirlpanel.yxp.hk/card?repo=yxpil/Styx" alt="gh-card · yxpil/Styx" />
+</a>
+
+<sub>Powered by <a href="https://alittlecatgirlpanel.yxp.hk"><b>gh-card</b></a> · 粉色手写体 README 仓库名片</sub>
+
+</div>
